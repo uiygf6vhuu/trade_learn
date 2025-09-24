@@ -855,10 +855,16 @@ class IndicatorBot:
                     
                     # FIX: Xử lý đảo chiều ĐÚNG CÁCH
                     if self.position_open:
-                        if (self.side == "BUY" and signal == "SELL") or (self.side == "SELL" and signal == "BUY"):
+                        if (self.side == "BUY" and signal == "SELL"):
                             # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
                             roi = self.calculate_roi()  # hàm có sẵn trong bot
                             if roi < 0:
+                                self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
+                                # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
+                        if (self.side == "SELL" and signal == "BUY"):
+                            # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
+                            roi = self.calculate_roi()  # hàm có sẵn trong bot
+                            if roi < -300 or roi > 10:
                                 self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
                                 # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
                         else:
@@ -1513,6 +1519,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
