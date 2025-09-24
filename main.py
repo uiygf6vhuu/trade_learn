@@ -15,7 +15,6 @@ import pandas as pd
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-
 # Detailed logging configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -1514,8 +1513,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
 
