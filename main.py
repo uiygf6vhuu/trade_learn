@@ -14,10 +14,7 @@ import math
 import pandas as pd
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
 
-# Load biến môi trường từ file .env
-load_dotenv()
 
 # Detailed logging configuration
 logging.basicConfig(
@@ -1517,6 +1514,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
