@@ -566,22 +566,39 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
     
     # Giai đoạn hoạt động thực tế (tỷ lệ phần trăm)
     else:
-        adjustment_rate = 0.05  # Điều chỉnh 0.5% mỗi nến
+        adjustment_rate = 0.05  # Đã thay đổi thành 1.5% (hoặc giá trị bạn muốn)
         for indicator, signal in current_signals.items():
             if indicator in indicator_weights:
-                if (signal == 1 and is_price_up) or (signal == -1 and is_price_down):
-                    indicator_weights[indicator] *= (1 + adjustment_rate)
-                elif (signal == 1 and is_price_down) or (signal == -1 and is_price_up):
-                    indicator_weights[indicator] *= (1 - adjustment_rate)
+                current_weight = indicator_weights[indicator]
+                
+                # Xác định nếu tín hiệu (signal) trùng với hướng giá (price_up)
+                signal_matched_price = (signal == 1 and is_price_up) or \
+                                       (signal == -1 and is_price_down)
+                
+                if current_weight >= 0:
+                    # TRỌNG SỐ DƯƠNG (Vai trò THUẬN):
+                    if signal_matched_price:
+                        # Đúng: Tín hiệu thuận khớp giá -> Khuếch đại W
+                        indicator_weights[indicator] *= (1 + adjustment_rate)
+                    else:
+                        # Sai: Tín hiệu thuận ngược giá -> Giảm W (về 0)
+                        indicator_weights[indicator] *= (1 - adjustment_rate)
+                        
+                else: # current_weight < 0
+                    # TRỌNG SỐ ÂM (Vai trò NGHỊCH):
+                    if signal_matched_price:
+                        # MẤT VAI TRÒ: Tín hiệu nghịch lại khớp giá -> Giảm |W| (Tăng W về 0)
+                        indicator_weights[indicator] *= (1 - adjustment_rate)
+                    else:
+                        # ĐÚNG VAI TRÒ: Tín hiệu nghịch lại ngược giá -> Khuếch đại |W| (Âm sâu hơn)
+                        indicator_weights[indicator] *= (1 + adjustment_rate)
 
-        # Chuẩn hóa lại các trọng số
+        # SỬA LỖI TĂNG VÔ HẠN VÀ DUY TRÌ DẤU: Chuẩn hóa lại theo tổng GIÁ TRỊ TUYỆT ĐỐI về 100
         total_abs_weight = sum(abs(w) for w in indicator_weights.values())
         if total_abs_weight > 0:
             for indicator in indicator_weights:
-                # Giữ nguyên dấu, chuẩn hóa tỷ lệ theo tổng giá trị tuyệt đối
                 indicator_weights[indicator] = (indicator_weights[indicator] / total_abs_weight) * 100
         else:
-            # Nếu tất cả trọng số đều bằng 0, đặt lại mặc định dương
             num_indicators = len(indicator_weights)
             if num_indicators > 0:
                 for indicator in indicator_weights:
@@ -1551,6 +1568,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
