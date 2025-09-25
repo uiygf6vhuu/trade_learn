@@ -566,7 +566,8 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
     
     # Giai đoạn hoạt động thực tế (tỷ lệ phần trăm)
     else:
-        adjustment_rate = 0.05  # Đã thay đổi thành 1.5% (hoặc giá trị bạn muốn)
+        # SỬ DỤNG ĐIỀU CHỈNH CỐ ĐỊNH: 0.5% của tổng 100%
+        adjustment_unit = 0.5  # Điều chỉnh 0.5 đơn vị (0.5%) mỗi nến
         for indicator, signal in current_signals.items():
             if indicator in indicator_weights:
                 current_weight = indicator_weights[indicator]
@@ -575,25 +576,29 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
                 signal_matched_price = (signal == 1 and is_price_up) or \
                                        (signal == -1 and is_price_down)
                 
-                if current_weight >= 0:
-                    # TRỌNG SỐ DƯƠNG (Vai trò THUẬN):
-                    if signal_matched_price:
-                        # Đúng: Tín hiệu thuận khớp giá -> Khuếch đại W
-                        indicator_weights[indicator] *= (1 + adjustment_rate)
+                # --- LOGIC CỘNG/TRỪ CỐ ĐỊNH (Cho phép đảo dấu) ---
+                
+                # 1. Tín hiệu ĐÚNG: Củng cố (Move W AWAY from 0)
+                if (current_weight >= 0 and signal_matched_price) or \
+                   (current_weight < 0 and not signal_matched_price):
+                    
+                    if current_weight >= 0:
+                        # W > 0, Đúng -> Tăng (Dương hơn)
+                        indicator_weights[indicator] += adjustment_unit
                     else:
-                        # Sai: Tín hiệu thuận ngược giá -> Giảm W (về 0)
-                        indicator_weights[indicator] *= (1 - adjustment_rate)
-                        
-                else: # current_weight < 0
-                    # TRỌNG SỐ ÂM (Vai trò NGHỊCH):
-                    if signal_matched_price:
-                        # MẤT VAI TRÒ: Tín hiệu nghịch lại khớp giá -> Giảm |W| (Tăng W về 0)
-                        indicator_weights[indicator] *= (1 - adjustment_rate)
-                    else:
-                        # ĐÚNG VAI TRÒ: Tín hiệu nghịch lại ngược giá -> Khuếch đại |W| (Âm sâu hơn)
-                        indicator_weights[indicator] *= (1 + adjustment_rate)
+                        # W < 0, Đúng (Vai trò nghịch) -> Giảm (Âm sâu hơn)
+                        indicator_weights[indicator] -= adjustment_unit
 
-        # SỬA LỖI TĂNG VÔ HẠN VÀ DUY TRÌ DẤU: Chuẩn hóa lại theo tổng GIÁ TRỊ TUYỆT ĐỐI về 100
+                # 2. Tín hiệu SAI: Suy yếu (Move W TOWARDS 0, hoặc đảo dấu)
+                else:
+                    if current_weight > 0:
+                        # W > 0, Sai -> Giảm (Về 0, có thể âm)
+                        indicator_weights[indicator] -= adjustment_unit
+                    else:
+                        # W <= 0, Sai -> Tăng (Về 0, có thể dương)
+                        indicator_weights[indicator] += adjustment_unit
+
+        # CHUẨN HÓA LẠI: (Phần này vẫn giữ nguyên logic chuẩn hóa theo tổng |W|)
         total_abs_weight = sum(abs(w) for w in indicator_weights.values())
         if total_abs_weight > 0:
             for indicator in indicator_weights:
@@ -603,6 +608,8 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
             if num_indicators > 0:
                 for indicator in indicator_weights:
                     indicator_weights[indicator] = 100.0 / num_indicators
+    
+    # ... (Phần log sau đó giữ nguyên) ...
     logging.info("--- New weights and stats ---")
     if is_initial_training:
         for indicator, score in indicator_stats.items():
@@ -1568,6 +1575,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
