@@ -1121,9 +1121,9 @@ class BotManager:
 
     def log(self, message, is_critical=True):
         """Ghi log và chỉ gửi Telegram nếu là thông báo quan trọng."""
-        logger.info(f"[{self.symbol}] {message}")
+        logger.info(f"[SYSTEM] {message}") 
         if is_critical:
-            send_telegram(f"<b>{self.symbol}</b>: {message}")
+            send_telegram(f"<b>SYSTEM</b>: {message}")
 
     def send_main_menu(self, chat_id):
         welcome = "🤖 <b>BINANCE FUTURES TRADING BOT</b>\n\nChoose an option below:"
@@ -1551,6 +1551,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
