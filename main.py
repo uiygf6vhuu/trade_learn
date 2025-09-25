@@ -575,11 +575,17 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
                     indicator_weights[indicator] *= (1 - adjustment_rate)
 
         # Chuẩn hóa lại các trọng số
-        total_weight = sum(indicator_weights.values())
-        if total_weight > 0:
+        total_abs_weight = sum(abs(w) for w in indicator_weights.values())
+        if total_abs_weight > 0:
             for indicator in indicator_weights:
-                indicator_weights[indicator] = (indicator_weights[indicator] / total_weight) * 100
-    
+                # Giữ nguyên dấu, chuẩn hóa tỷ lệ theo tổng giá trị tuyệt đối
+                indicator_weights[indicator] = (indicator_weights[indicator] / total_abs_weight) * 100
+        else:
+            # Nếu tất cả trọng số đều bằng 0, đặt lại mặc định dương
+            num_indicators = len(indicator_weights)
+            if num_indicators > 0:
+                for indicator in indicator_weights:
+                    indicator_weights[indicator] = 100.0 / num_indicators
     logging.info("--- New weights and stats ---")
     if is_initial_training:
         for indicator, score in indicator_stats.items():
@@ -851,20 +857,20 @@ class IndicatorBot:
                     
                     # Log thông tin tín hiệu
                     if signal:
-                        self.log(f"📊 Signal: {signal}, Score: {total_score:.2f}")
+                        self.log(f"📊 Signal: {signal}, Score: {total_score:.2f}", is_critical=False)
                     
                     # FIX: Xử lý đảo chiều ĐÚNG CÁCH
                     if self.position_open:
                         if (self.side == "BUY" and signal == "SELL"):
                             # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
                             roi = self.calculate_roi()  # hàm có sẵn trong bot
-                            if roi < 0:
+                            if roi < 0 and roi != -5000 and roi != 5000:
                                 self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
                                 # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
                         if (self.side == "SELL" and signal == "BUY"):
                             # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
                             roi = self.calculate_roi()  # hàm có sẵn trong bot
-                            if roi < -300 or roi > 10:
+                            if (roi < -300 or roi > 10) and roi != -5000 and roi != 5000:
                                 self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
                                 # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
                         else:
@@ -879,7 +885,7 @@ class IndicatorBot:
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 30:
-                    self.log(f"❌ Main loop error: {str(e)}")
+                    self.log(f"❌ Main loop error: {str(e)}", is_critical=False)
                     self.last_error_log_time = time.time()
                 time.sleep(10)
 
@@ -1003,7 +1009,7 @@ class IndicatorBot:
                 return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty <= 0:
+            if executed_qty < 0:
                 self.log(f"❌ Order not filled: {executed_qty}")
                 return
                 
@@ -1016,13 +1022,30 @@ class IndicatorBot:
             self.position_attempt_count = 0
 
             # Gửi thông báo
+            # Gửi thông báo VÀ IN LOG CHỈ BÁO CHI TIẾT
             indicator_info = "Không đủ dữ liệu chỉ báo."
+            total_score = 0.0
+            
             if current_indicators:
                 indicator_info = "Phân tích tín hiệu:\n"
+                
                 for indicator, status in current_indicators.items():
                     weight = self.indicator_weights.get(indicator, 0)
+                    score_contribution = status * weight
+                    total_score += score_contribution
+                    
                     sign_text = "🟢 Tăng" if status == 1 else "🔴 Giảm" if status == -1 else "⚪ Trung lập"
-                    indicator_info += f"- {indicator}: {weight:.2f}% ({sign_text})\n"
+                    
+                    # Xác định màu sắc/biểu tượng dựa trên đóng góp vào tín hiệu cuối cùng
+                    if score_contribution > 0:
+                        color_tag = "✅"
+                    elif score_contribution < 0:
+                        color_tag = "❌"
+                    else:
+                        color_tag = "⚪"
+                    
+                    indicator_info += (f"{color_tag} {indicator}: Trọng số **{weight:+.1f}%** "
+                                       f"(Tín hiệu: {sign_text}, Score: {score_contribution:+.2f})\n")
 
             message = (f"✅ <b>POSITION OPENED {self.symbol}</b>\n"
                        f"📌 Direction: {side}\n"
@@ -1030,9 +1053,12 @@ class IndicatorBot:
                        f"📊 Quantity: {executed_qty}\n"
                        f"💵 Value: {executed_qty * self.entry:.2f} USDT\n"
                        f" Leverage: {self.lev}x\n"
-                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n\n"
+                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n"
+                       f"🔥 **TOTAL SCORE: {total_score:+.2f}**\n\n"
                        f"{indicator_info}")
-            self.log(message)
+            
+            # Gửi Telegram (is_critical=True là mặc định)
+            self.log(message, is_critical=True)
             
         except Exception as e:
             self.position_open = False
@@ -1091,9 +1117,11 @@ class BotManager:
         if self.admin_chat_id:
             self.send_main_menu(self.admin_chat_id)
 
-    def log(self, message):
-        logger.info(f"[SYSTEM] {message}")
-        send_telegram(f"<b>SYSTEM</b>: {message}")
+    def log(self, message, is_critical=True):
+        """Ghi log và chỉ gửi Telegram nếu là thông báo quan trọng."""
+        logger.info(f"[{self.symbol}] {message}")
+        if is_critical:
+            send_telegram(f"<b>{self.symbol}</b>: {message}")
 
     def send_main_menu(self, chat_id):
         welcome = "🤖 <b>BINANCE FUTURES TRADING BOT</b>\n\nChoose an option below:"
@@ -1432,14 +1460,16 @@ def perform_initial_training(manager, bot_configs):
                         continue
 
                 # ✅ Dùng tổng score có dấu để tạo trọng số
-                total_score = sum(indicator_stats.values())
+                total_abs_score = sum(abs(score) for score in indicator_stats.values())
 
-                if total_score != 0:
+                if total_abs_score > 0:
+                    # Trọng số CÓ DẤU (có thể âm)
                     indicator_weights = {
-                        ind: (score / total_score) * 100
+                        ind: (score / total_abs_score) * 100
                         for ind, score in indicator_stats.items()
                     }
                 else:
+                    # Nếu tất cả score đều bằng 0, dùng trọng số mặc định dương
                     num_indicators = len(indicator_stats)
                     indicator_weights = {ind: 100.0 / num_indicators for ind in indicator_stats.keys()}
 
@@ -1519,6 +1549,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
