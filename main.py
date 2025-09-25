@@ -566,7 +566,7 @@ def update_weights_and_stats(current_signals, price_change_percent, indicator_we
     
     # Giai đoạn hoạt động thực tế (tỷ lệ phần trăm)
     else:
-        adjustment_rate = 0.005  # Điều chỉnh 0.5% mỗi nến
+        adjustment_rate = 0.05  # Điều chỉnh 0.5% mỗi nến
         for indicator, signal in current_signals.items():
             if indicator in indicator_weights:
                 if (signal == 1 and is_price_up) or (signal == -1 and is_price_down):
@@ -1551,6 +1551,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
