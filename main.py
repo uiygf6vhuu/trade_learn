@@ -766,9 +766,11 @@ class IndicatorBot:
         total = sum(default_weights.values())
         return {k: (v / total) * 100 for k, v in default_weights.items()}
 
-    def log(self, message):
-        logger.info(f"[{self.symbol}] {message}")
-        send_telegram(f"<b>{self.symbol}</b>: {message}")
+    def log(self, message, is_critical=True):
+        """Ghi log và chỉ gửi Telegram nếu là thông báo quan trọng."""
+        logger.info(f"[SYSTEM] {message}") 
+        if is_critical:
+            send_telegram(f"<b>SYSTEM</b>: {message}")
 
     def _handle_price_update(self, price):
         """Xử lý giá real-time từ WebSocket"""
@@ -1549,6 +1551,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
