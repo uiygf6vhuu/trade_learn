@@ -738,7 +738,7 @@ class IndicatorBot:
         self.prices = []
 
         self._stop = False
-        self.signal_threshold = 50
+        self.signal_threshold = 25
         self.position_open = False
         self.last_trade_time = 0
         self.position_check_interval = 30
@@ -1586,6 +1586,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
