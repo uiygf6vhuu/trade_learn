@@ -1091,29 +1091,40 @@ class IndicatorBot:
             self.log(f"❌ Error entering position: {str(e)}")
 
     def close_position(self, reason=""):
+        # Lấy logic đóng lệnh từ file 42: Đóng vị thế với số lượng chính xác
         try:
             cancel_all_orders(self.symbol)
             if abs(self.qty) > 0:
                 close_side = "SELL" if self.side == "BUY" else "BUY"
                 close_qty = abs(self.qty)
                 
+                # Làm tròn số lượng CHÍNH XÁC
                 step = get_step_size(self.symbol)
                 if step > 0:
-                    close_qty = math.floor(close_qty / step) * step
-                    
-                close_qty = max(close_qty, step)
+                    # Tính toán chính xác số bước
+                    steps = close_qty / step
+                    # Làm tròn đến số nguyên gần nhất
+                    close_qty = round(steps) * step
+                
+                close_qty = max(close_qty, 0)
                 close_qty = round(close_qty, 8)
                 
                 res = place_order(self.symbol, close_side, close_qty)
                 if res:
                     price = float(res.get('avgPrice', 0))
+                    
+                    # Tính ROI cho thông báo đóng lệnh (dùng hàm đã có trong 43)
+                    roi = self.calculate_roi() 
+
                     message = (f"⛔ <b>POSITION CLOSED {self.symbol}</b>\n"
                               f"📌 Reason: {reason}\n"
                               f"🏷️ Exit Price: {price:.4f}\n"
                               f"📊 Quantity: {close_qty}\n"
-                              f"💵 Value: {close_qty * price:.2f} USDT")
+                              f"💵 Value: {close_qty * price:.2f} USDT\n"
+                              f"🔥 ROI: {roi:.2f}%") # Thêm ROI vào thông báo
                     self.log(message)
                     
+                    # Cập nhật trạng thái NGAY LẬP TỨC (quan trọng)
                     self.status = "waiting"
                     self.side = ""
                     self.qty = 0
@@ -1575,6 +1586,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
