@@ -850,7 +850,7 @@ class IndicatorBot:
                     self.last_position_check = current_time
                     
                 # Lấy dữ liệu nến 1 phút
-                df = get_klines(self.symbol, "1m", 100)
+                df = get_klines(self.symbol, "15m", 100)
                 if df.empty or len(df) < 50:
                     time.sleep(2)
                     continue
@@ -1461,7 +1461,7 @@ def perform_initial_training(manager, bot_configs):
             }
 
             # Lấy 200 nến lịch sử để huấn luyện
-            df_history = get_klines(symbol, '1m', 200)
+            df_history = get_klines(symbol, '15m', 200)
 
             if not df_history.empty and len(df_history) >= 100:
                 manager.log(f"🚀 Training {symbol} with {len(df_history)} candles...")
@@ -1586,6 +1586,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
