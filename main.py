@@ -36,6 +36,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 # Get bot configuration from environment variables (JSON format)
 bot_config_json = os.getenv('BOT_CONFIGS', '[]')
 try:
+    # BOT_CONFIGS không còn cần initial_weights
     BOT_CONFIGS = json.loads(bot_config_json)
 except Exception as e:
     logging.error(f"Error parsing BOT_CONFIGS: {e}")
@@ -343,284 +344,81 @@ def get_klines(symbol, interval, limit=200):
     
     return pd.DataFrame()
 
-# ========== TECHNICAL INDICATORS ==========
-def calc_rsi(series, period=14):
-    try:
-        delta = series.diff()
-        up = delta.clip(lower=0)
-        down = -delta.clip(upper=0)
-        ma_up = up.rolling(period).mean()
-        ma_down = down.rolling(period).mean()
-        rs = ma_up / ma_down
-        return 100 - (100 / (1 + rs))
-    except Exception as e:
-        logger.error(f"Error calculating RSI: {str(e)}")
-        return pd.Series([None] * len(series))
-
-def calc_ema(series, period):
-    try:
-        return series.ewm(span=period, adjust=False).mean()
-    except Exception as e:
-        logger.error(f"Error calculating EMA: {str(e)}")
-        return pd.Series([None] * len(series))
-
-def calc_atr(df, period=14):
-    try:
-        high_low = df["high"] - df["low"]
-        high_close = (df["high"] - df["close"].shift()).abs()
-        low_close = (df["low"] - df["close"].shift()).abs()
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        return tr.rolling(period).mean()
-    except Exception as e:
-        logger.error(f"Error calculating ATR: {str(e)}")
-        return pd.Series([None] * len(df))
-
-def calc_macd(series, fast_period=12, slow_period=26, signal_period=9):
-    try:
-        ema_fast = series.ewm(span=fast_period, adjust=False).mean()
-        ema_slow = series.ewm(span=slow_period, adjust=False).mean()
-        macd = ema_fast - ema_slow
-        signal = macd.ewm(span=signal_period, adjust=False).mean()
-        macd_hist = macd - signal
-        return macd, signal, macd_hist
-    except Exception as e:
-        logger.error(f"Error calculating MACD: {str(e)}")
-        empty_series = pd.Series([None] * len(series))
-        return empty_series, empty_series, empty_series
-
-def calc_ichimoku(df):
-    try:
-        high_9 = df['high'].rolling(window=9).max()
-        low_9 = df['low'].rolling(window=9).min()
-        tenkan_sen = (high_9 + low_9) / 2
-
-        high_26 = df['high'].rolling(window=26).max()
-        low_26 = df['low'].rolling(window=26).min()
-        kijun_sen = (high_26 + low_26) / 2
-
-        return tenkan_sen, kijun_sen
-    except Exception as e:
-        logger.error(f"Error calculating Ichimoku: {str(e)}")
-        empty_series = pd.Series([None] * len(df))
-        return empty_series, empty_series
-
-def calc_adx(df, period=14):
-    try:
-        # Simplified ADX calculation for demonstration
-        plus_di = df['high'].diff().rolling(period).mean()
-        minus_di = df['low'].diff().rolling(period).mean()
-        adx = (plus_di + minus_di).abs() / 2
-        return adx
-    except Exception as e:
-        logger.error(f"Error calculating ADX: {str(e)}")
-        return pd.Series([None] * len(df))
+# ========== TECHNICAL INDICATORS (ĐƠN GIẢN HÓA) ==========
 
 def add_technical_indicators(df):
-    """Adds all technical indicators to the DataFrame."""
-    if df.empty or len(df) < 50:
+    """
+    Chỉ giữ lại dữ liệu thô (open, close, volume) cần thiết cho chiến lược Volume.
+    """
+    if df.empty or len(df) < 2:
         return df
 
-    # Tính Volume SMA trước
-    df['volume_sma'] = df['volume'].rolling(window=20).mean()
-
-    # Các chỉ báo khác
-    df['RSI'] = calc_rsi(df['close'], 14)
-    df['EMA9'] = calc_ema(df['close'], 9)
-    df['EMA21'] = calc_ema(df['close'], 21)
+    # Đảm bảo các cột số là kiểu số
+    numeric_columns = ["open", "high", "low", "close", "volume"]
+    for col in numeric_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+    df = df.dropna(subset=numeric_columns)
     
-    # MACD
-    macd, macd_signal, macd_hist = calc_macd(df['close'])
-    df['MACD'] = macd
-    df['MACD_Signal'] = macd_signal
-    df['MACD_Hist'] = macd_hist
-
-    # Stochastic
-    df['stoch_k'] = 100 * ((df['close'] - df['low'].rolling(14).min()) / 
-                          (df['high'].rolling(14).max() - df['low'].rolling(14).min()))
-    df['stoch_d'] = df['stoch_k'].rolling(3).mean()
-
-    # Bollinger Bands
-    df['bollinger_high'] = df['close'].rolling(20).mean() + 2 * df['close'].rolling(20).std()
-    df['bollinger_low'] = df['close'].rolling(20).mean() - 2 * df['close'].rolling(20).std()
-
-    # Ichimoku
-    tenkan, kijun = calc_ichimoku(df)
-    df['ichimoku_tenkan_sen'] = tenkan
-    df['ichimoku_kijun_sen'] = kijun
-
-    # ADX và DI
-    df['plus_di'] = df['high'].diff().rolling(14).mean()
-    df['minus_di'] = df['low'].diff().rolling(14).mean()
-    df['ADX'] = (df['plus_di'] + df['minus_di']).abs() / 2
+    # Giữ lại các cột quan trọng
+    df = df[["open_time", "close_time", "open", "close", "volume"]]
 
     return df
 
-# ========== NEW SIGNAL FUNCTIONS ==========
-def get_raw_indicator_signals(df):
-    """Calculates raw signals (+1/-1/0) for each indicator."""
-    if len(df) < 2:  # Cần ít nhất 2 nến để so sánh
-        return {}
-        
-    current_signals = {}
-    current = df.iloc[-1]
-    previous = df.iloc[-2] if len(df) > 1 else current
-    
-    # RSI: Tín hiệu mua khi quá bán (< 30), tín hiệu bán khi quá mua (> 70)
-    rsi_value = current['RSI'] if pd.notna(current['RSI']) else 50
-    if rsi_value < 20 or 60 < rsi_value < 80:
-        current_signals["RSI"] = 1
-    elif rsi_value > 80 or 20 < rsi_value < 40:
-        current_signals["RSI"] = -1
-    else:
-        current_signals["RSI"] = 0
+# ========== SIGNAL FUNCTIONS (LOGIC MỚI THEO YÊU CẦU) ==========
 
-    # MACD: MACD line > signal line là tăng
-    if pd.notna(current['MACD']) and pd.notna(current['MACD_Signal']):
-        if current['MACD'] > current['MACD_Signal']:
-            current_signals["MACD"] = 1
-        else:
-            current_signals["MACD"] = -1
-    else:
-        current_signals["MACD"] = 0
-
-    # EMA Crossover: EMA9 > EMA21 là tăng
-    if pd.notna(current['EMA9']) and pd.notna(current['EMA21']):
-        if current['EMA9'] > current['EMA21']:
-            current_signals["EMA_Crossover"] = 1
-        else:
-            current_signals["EMA_Crossover"] = -1
-    else:
-        current_signals["EMA_Crossover"] = 0
-
-    # Volume Confirmation: Nến tăng + volume cao là tăng
-    if pd.notna(current['volume']) and pd.notna(current['volume_sma']):
-        volume_condition = current['volume'] > current['volume_sma'] * 1.5
-        if current['close'] > current['open'] and volume_condition:
-            current_signals["Volume_Confirmation"] = 1
-        elif current['close'] < current['open'] and volume_condition:
-            current_signals["Volume_Confirmation"] = -1
-        else:
-            current_signals["Volume_Confirmation"] = 0
-    else:
-        current_signals["Volume_Confirmation"] = 0
-
-    # Stochastic Oscillator: K line > D line
-    if pd.notna(current['stoch_k']) and pd.notna(current['stoch_d']):
-        if current['stoch_k'] > current['stoch_d']:
-            current_signals["Stochastic"] = 1
-        else:
-            current_signals["Stochastic"] = -1
-    else:
-        current_signals["Stochastic"] = 0
-
-    # Bollinger Bands: Giá dưới dải dưới là tăng, trên dải trên là giảm
-    if pd.notna(current['bollinger_low']) and pd.notna(current['bollinger_high']):
-        if current['close'] < current['bollinger_low']:
-            current_signals["BollingerBands"] = 1
-        elif current['close'] > current['bollinger_high']:
-            current_signals["BollingerBands"] = -1
-        else:
-            current_signals["BollingerBands"] = 0
-    else:
-        current_signals["BollingerBands"] = 0
-
-    # Ichimoku: Tenkan Sen > Kijun Sen là tín hiệu tăng
-    if pd.notna(current['ichimoku_tenkan_sen']) and pd.notna(current['ichimoku_kijun_sen']):
-        if current['ichimoku_tenkan_sen'] > current['ichimoku_kijun_sen']:
-            current_signals["Ichimoku"] = 1
-        else:
-            current_signals["Ichimoku"] = -1
-    else:
-        current_signals["Ichimoku"] = 0
-
-    # ADX: ADX > 25 và (+DI > -DI) là tín hiệu tăng
-    if pd.notna(current['ADX']) and pd.notna(current['plus_di']) and pd.notna(current['minus_di']):
-        if current['ADX'] > 25 and current['plus_di'] > current['minus_di']:
-            current_signals["ADX"] = 1
-        elif current['ADX'] > 25 and current['minus_di'] > current['plus_di']:
-            current_signals["ADX"] = -1
-        else:
-            current_signals["ADX"] = 0
-    else:
-        current_signals["ADX"] = 0
-        
-    return current_signals
-
-def update_weights_and_stats(current_signals, price_change_percent, indicator_weights, indicator_stats, is_initial_training):
+def get_signal(df):
     """
-    Dynamically adjusts indicator weights based on their performance on a single candle.
-    This function is used for both initial training and real-time learning.
+    Tính tín hiệu dựa trên:
+    1. So sánh Volume nến VỪA ĐÓNG với nến ĐANG CHẠY.
+    2. Hướng của nến đang chạy (xanh/đỏ).
+    
+    Tín hiệu được tạo nếu Volume_Current > 1.2 * Volume_Closed.
     """
-    
-    is_price_up = price_change_percent > 0
-    is_price_down = price_change_percent < 0
-    
-    # Giai đoạn huấn luyện ban đầu (điểm số)
-    if is_initial_training:
-        for indicator, signal in current_signals.items():
-            if indicator in indicator_stats:
-                if (signal == 1 and is_price_up) or (signal == -1 and is_price_down):
-                    indicator_stats[indicator] += 1
-                elif (signal == 1 and is_price_down) or (signal == -1 and is_price_up):
-                    indicator_stats[indicator] -= 1
-    
-    # Giai đoạn hoạt động thực tế (tỷ lệ phần trăm)
-    else:
-        # SỬ DỤNG ĐIỀU CHỈNH CỐ ĐỊNH: 0.5% của tổng 100%
-        adjustment_unit = 0.5  # Điều chỉnh 0.5 đơn vị (0.5%) mỗi nến
-        for indicator, signal in current_signals.items():
-            if indicator in indicator_weights:
-                current_weight = indicator_weights[indicator]
-                
-                # Xác định nếu tín hiệu (signal) trùng với hướng giá (price_up)
-                signal_matched_price = (signal == 1 and is_price_up) or \
-                                       (signal == -1 and is_price_down)
-                
-                # --- LOGIC CỘNG/TRỪ CỐ ĐỊNH (Cho phép đảo dấu) ---
-                
-                # 1. Tín hiệu ĐÚNG: Củng cố (Move W AWAY from 0)
-                if (current_weight >= 0 and signal_matched_price) or \
-                   (current_weight < 0 and not signal_matched_price):
-                    
-                    if current_weight >= 0:
-                        # W > 0, Đúng -> Tăng (Dương hơn)
-                        indicator_weights[indicator] += adjustment_unit
-                    else:
-                        # W < 0, Đúng (Vai trò nghịch) -> Giảm (Âm sâu hơn)
-                        indicator_weights[indicator] -= adjustment_unit
-
-                # 2. Tín hiệu SAI: Suy yếu (Move W TOWARDS 0, hoặc đảo dấu)
-                else:
-                    if current_weight > 0:
-                        # W > 0, Sai -> Giảm (Về 0, có thể âm)
-                        indicator_weights[indicator] -= adjustment_unit
-                    else:
-                        # W <= 0, Sai -> Tăng (Về 0, có thể dương)
-                        indicator_weights[indicator] += adjustment_unit
-
-        # CHUẨN HÓA LẠI: (Phần này vẫn giữ nguyên logic chuẩn hóa theo tổng |W|)
-        total_abs_weight = sum(abs(w) for w in indicator_weights.values())
-        if total_abs_weight > 0:
-            for indicator in indicator_weights:
-                indicator_weights[indicator] = (indicator_weights[indicator] / total_abs_weight) * 100
-        else:
-            num_indicators = len(indicator_weights)
-            if num_indicators > 0:
-                for indicator in indicator_weights:
-                    indicator_weights[indicator] = 100.0 / num_indicators
-    
-    # ... (Phần log sau đó giữ nguyên) ...
-    logging.info("--- New weights and stats ---")
-    if is_initial_training:
-        for indicator, score in indicator_stats.items():
-            logging.info(f"📊 {indicator}: Score {score}")
-    else:
-        for indicator, weight in indicator_weights.items():
-            logging.info(f"📊 {indicator}: Weight {weight:.2f}%")
+    # Cần ít nhất 2 nến để so sánh (nến vừa đóng và nến đang chạy)
+    if len(df) < 2:
+        return None, None
         
+    # Nến vừa đóng (Closed Candle)
+    closed_candle = df.iloc[-2]
+    closed_volume = closed_candle['volume']
+    
+    # Nến đang chạy (Current/Forming Candle)
+    current_candle = df.iloc[-1]
+    current_volume = current_candle['volume']
+    
+    # Xác định hướng nến đang chạy
+    is_green_candle = current_candle['close'] > current_candle['open']
+    is_red_candle = current_candle['close'] < current_candle['open']
+
+    # Kiểm tra điều kiện Volume
+    volume_condition_met = current_volume > (closed_volume * 2)
+    
+    signal = None
+    
+    if volume_condition_met:
+        if is_green_candle:
+            signal = "BUY"
+        elif is_red_candle:
+            signal = "SELL"
+            
+    # Trả về tín hiệu, và Volume hiện tại/đóng để log
+    volume_data = {
+        "Current_Volume": current_volume, 
+        "Closed_Volume": closed_volume
+    }
+    return signal, volume_data
+
+def update_weights_and_stats(*args):
+    """
+    Hàm này không còn cần thiết và được giữ lại ở dạng tối giản để tránh lỗi.
+    """
+    # Không thực hiện điều chỉnh trọng số
+    indicator_weights = args[2] if len(args) > 2 and isinstance(args[2], dict) else {}
+    indicator_stats = args[3] if len(args) > 3 and isinstance(args[3], dict) else {}
     return indicator_weights, indicator_stats
 
-# ========== WEBSOCKET MANAGER ==========
+# ========== WEBSOCKET MANAGER (Giữ nguyên) ==========
 class WebSocketManager:
     def __init__(self):
         self.connections = {}
@@ -715,21 +513,10 @@ class IndicatorBot:
         self.sl = sl
         self.ws_manager = ws_manager
         
-        # FIX: Sửa lỗi weights từ training
-        if initial_weights and isinstance(initial_weights, dict) and self._are_weights_valid(initial_weights):
-            self.indicator_weights = initial_weights
-            weights_info = " | ".join([f"{k}:{v:.1f}%" for k, v in initial_weights.items()])
-            if all(w < 0 for w in initial_weights.values()):
-                self.log(f"⚠️ Tất cả weights âm từ training 200 nến: {weights_info}")
-            else:
-                self.log(f"✅ Sử dụng weights từ training 200 nến: {weights_info}")
-        else:
-            self.indicator_weights = self._create_default_weights()
-            default_weights_info = " | ".join([f"{k}:{v:.1f}%" for k, v in self.indicator_weights.items()])
-            self.log(f"⚠️ Dùng weights mặc định: {default_weights_info}")
-
-        self.indicator_stats = {k: 0 for k in self.indicator_weights.keys()}
-
+        # Xóa/Đơn giản hóa logic weights/stats
+        self.indicator_weights = {} 
+        self.indicator_stats = {} 
+        
         self.check_position_status()
         self.status = "waiting"
         self.side = ""
@@ -738,23 +525,26 @@ class IndicatorBot:
         self.prices = []
 
         self._stop = False
-        self.signal_threshold = 25
+        self.signal_threshold = 0 # Không dùng ngưỡng
         self.position_open = False
         self.last_trade_time = 0
         self.position_check_interval = 30
         self.last_position_check = 0
         self.last_error_log_time = 0
         self.last_close_time = 0
-        self.cooldown_period = 10
+        # Đã sửa: Cooldown 60s
+        self.cooldown_period = 60 
         self.max_position_attempts = 3
         self.position_attempt_count = 0
-        self.last_candle_timestamp = 0
+        self.last_candle_timestamp = 0 # Dùng để theo dõi nến vừa đóng
 
         # Bắt đầu WebSocket và main loop
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-        self.log(f"🟢 Bot started for {self.symbol} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
+        # Đã sửa: Logic thành Volume 1m
+        self.log(f"🟢 Bot started for {self.symbol} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}% | Logic: Volume 1m")
+
 
     def calculate_roi(self):
         """
@@ -771,37 +561,17 @@ class IndicatorBot:
         
         return roi
 
-
-    def _are_weights_valid(self, weights):
-        if not isinstance(weights, dict):
-            return False
-        if len(weights) == 0:
-            return False
-        # ✅ Chỉ cần có ít nhất 1 trọng số khác 0 (có thể âm hoặc dương)
-        return any(weight != 0 for weight in weights.values())
-
-
-    def _create_default_weights(self):
-        """Tạo trọng số mặc định"""
-        default_weights = {
-            "RSI": 15.0, "MACD": 15.0, "EMA_Crossover": 15.0, "Volume_Confirmation": 10.0,
-            "Stochastic": 15.0, "BollingerBands": 15.0, "Ichimoku": 10.0, "ADX": 5.0
-        }
-        total = sum(default_weights.values())
-        return {k: (v / total) * 100 for k, v in default_weights.items()}
-
     def log(self, message, is_critical=True):
         """Ghi log và chỉ gửi Telegram nếu là thông báo quan trọng."""
-        logger.info(f"[SYSTEM] {message}") 
+        logger.info(f"[{self.symbol}] {message}") 
         if is_critical:
-            send_telegram(f"<b>SYSTEM</b>: {message}")
+            send_telegram(f"<b>{self.symbol}</b>: {message}")
 
     def _handle_price_update(self, price):
         """Xử lý giá real-time từ WebSocket"""
         if self._stop:
             return
         
-        current_time = time.time()
         # Chỉ xử lý nếu có giá mới
         if not self.prices or price != self.prices[-1]:
             self.prices.append(price)
@@ -812,32 +582,9 @@ class IndicatorBot:
             if self.position_open:
                 self.check_tp_sl()
 
-    def get_signal(self, df):
-        try:
-            current_signals = get_raw_indicator_signals(df)
-    
-            # Tính điểm tổng: tín hiệu * trọng số (có thể âm/dương)
-            total_score = 0.0
-            for indicator, signal in current_signals.items():
-                weight = self.indicator_weights.get(indicator, 0.0)
-                total_score += signal * weight
-    
-            # Chuẩn hóa ngưỡng theo tổng trọng số tuyệt đối
-            total_weight_abs = sum(abs(w) for w in self.indicator_weights.values())
-            threshold = self.signal_threshold * (total_weight_abs / 100.0)
-    
-            if total_score > threshold:
-                return "BUY", current_signals, total_score
-            elif total_score < -threshold:
-                return "SELL", current_signals, total_score
-            return None, current_signals, total_score
-    
-        except Exception as e:
-            self.log(f"get_signal error: {str(e)}")
-            return None, None, None
 
     def _run(self):
-        """Main loop với xử lý nến 1 phút và học liên tục"""
+        """Main loop với xử lý nến 1 phút"""
         self.log("🔍 Starting main loop with 1-minute candle processing...")
         
         while not self._stop:
@@ -849,13 +596,13 @@ class IndicatorBot:
                     self.check_position_status()
                     self.last_position_check = current_time
                     
-                # Lấy dữ liệu nến 1 phút
-                df = get_klines(self.symbol, "15m", 100)
-                if df.empty or len(df) < 50:
-                    time.sleep(2)
+                # Đã sửa: Lấy dữ liệu nến 1 phút
+                df = get_klines(self.symbol, "1m", 10) 
+                if df.empty or len(df) < 2:
+                    time.sleep(1)
                     continue
 
-                # Thêm chỉ báo kỹ thuật
+                # Chỉ cần thêm các cột thô (Volume, Open, Close)
                 df = add_technical_indicators(df)
                 
                 # Kiểm tra dữ liệu hợp lệ
@@ -863,29 +610,24 @@ class IndicatorBot:
                     time.sleep(1)
                     continue
                     
-                # Phát hiện nến mới bằng timestamp
-                latest_candle_timestamp = df['close_time'].iloc[-1] / 1000  # Chuyển sang seconds
+                # Phát hiện nến vừa đóng hoàn toàn
+                latest_closed_candle_timestamp = df['close_time'].iloc[-2] / 1000 
                 
-                if latest_candle_timestamp > self.last_candle_timestamp:
-                    self.last_candle_timestamp = latest_candle_timestamp
+                if latest_closed_candle_timestamp > self.last_candle_timestamp:
+                    self.last_candle_timestamp = latest_closed_candle_timestamp
                     
-                    # Tính biến động giá và tín hiệu
-                    price_change_percent = ((df['close'].iloc[-1] - df['open'].iloc[-1]) / df['open'].iloc[-1]) * 100
-                    current_signals = get_raw_indicator_signals(df)
+                    # Tính toán tín hiệu dựa trên 2 nến cuối (1 vừa đóng và 1 đang chạy)
+                    signal, volume_data = get_signal(df)
                     
-                    # HỌC LIÊN TỤC TỪ DỮ LIỆU MỚI
-                    self.indicator_weights, _ = update_weights_and_stats(
-                        current_signals, price_change_percent, self.indicator_weights, self.indicator_stats, False
-                    )
+                    current_volume = volume_data.get("Current_Volume", 0)
+                    closed_volume = volume_data.get("Closed_Volume", 0)
                     
-                    # Kiểm tra tín hiệu giao dịch
-                    signal, current_signals, total_score = self.get_signal(df)
+                    # Đã sửa: Log thành Volume 1m
+                    log_msg = (f"📊 1m Volume Check | Current: {current_volume:.2f} | "
+                               f"Closed: {closed_volume:.2f} | Ratio: {current_volume/closed_volume if closed_volume else 0:.2f}x")
+                    self.log(log_msg, is_critical=False)
                     
-                    # Log thông tin tín hiệu
-                    if signal:
-                        self.log(f"📊 Signal: {signal}, Score: {total_score:.2f}", is_critical=False)
-                    
-                    # FIX: Xử lý đảo chiều ĐÚNG CÁCH
+                    # Xử lý lệnh
                     if self.position_open:
                         if (self.side == "BUY" and signal == "SELL"):
                             # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
@@ -896,7 +638,7 @@ class IndicatorBot:
                         if (self.side == "SELL" and signal == "BUY"):
                             # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
                             roi = self.calculate_roi()  # hàm có sẵn trong bot
-                            if (roi < -300 or roi > 10) and roi != -5000 and roi != 5000:
+                            if (roi < -100 or roi > 10) and roi != -5000 and roi != 5000:
                                 self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
                                 # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
                         else:
@@ -904,16 +646,18 @@ class IndicatorBot:
                     else:
                         # Vào lệnh mới nếu có tín hiệu
                         if signal and current_time - self.last_trade_time > self.cooldown_period:
-                            self.open_position(signal, current_signals)
+                            # Đã sửa lỗi: Truyền current_volume và closed_volume
+                            self.open_position(signal, current_volume, closed_volume) 
                             self.last_trade_time = current_time
                         
-                time.sleep(5)  # Sleep ngắn để phản ứng nhanh
+                time.sleep(1)  # Sleep ngắn hơn cho khung 1m
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 30:
                     self.log(f"❌ Main loop error: {str(e)}", is_critical=False)
                     self.last_error_log_time = time.time()
-                time.sleep(10)
+                time.sleep(5)
+
 
     def stop(self):
         self._stop = True
@@ -978,7 +722,7 @@ class IndicatorBot:
             
             if roi >= self.tp:
                 self.close_position(f"✅ TP hit at {self.tp}% (ROI: {roi:.2f}%)")
-            elif self.sl is not None and roi <= -self.sl:
+            elif self.sl is not None and self.sl > 0 and roi <= -self.sl: # Thêm điều kiện self.sl > 0
                 self.close_position(f"❌ SL hit at {self.sl}% (ROI: {roi:.2f}%)")
                 
         except Exception as e:
@@ -986,7 +730,7 @@ class IndicatorBot:
                 self.log(f"TP/SL check error: {str(e)}")
                 self.last_error_log_time = time.time()
 
-    def open_position(self, side, current_indicators=None):
+    def open_position(self, side, current_volume=0, closed_volume=0): # Thêm tham số volume
         self.check_position_status()
         if self.position_open:
             self.log("⚠️ Position already open, skipping")
@@ -1047,32 +791,8 @@ class IndicatorBot:
             self.position_open = True
             self.position_attempt_count = 0
 
-            # Gửi thông báo
-            # Gửi thông báo VÀ IN LOG CHỈ BÁO CHI TIẾT
-            indicator_info = "Không đủ dữ liệu chỉ báo."
-            total_score = 0.0
-            
-            if current_indicators:
-                indicator_info = "Phân tích tín hiệu:\n"
-                
-                for indicator, status in current_indicators.items():
-                    weight = self.indicator_weights.get(indicator, 0)
-                    score_contribution = status * weight
-                    total_score += score_contribution
-                    
-                    sign_text = "🟢 Tăng" if status == 1 else "🔴 Giảm" if status == -1 else "⚪ Trung lập"
-                    
-                    # Xác định màu sắc/biểu tượng dựa trên đóng góp vào tín hiệu cuối cùng
-                    if score_contribution > 0:
-                        color_tag = "✅"
-                    elif score_contribution < 0:
-                        color_tag = "❌"
-                    else:
-                        color_tag = "⚪"
-                    
-                    indicator_info += (f"{color_tag} {indicator}: Trọng số **{weight:+.1f}%** "
-                                       f"(Tín hiệu: {sign_text}, Score: {score_contribution:+.2f})\n")
-
+            # Gửi thông báo VÀ IN LOG CHI TIẾT VOLUME
+            volume_ratio = current_volume / closed_volume if closed_volume else 0
             message = (f"✅ <b>POSITION OPENED {self.symbol}</b>\n"
                        f"📌 Direction: {side}\n"
                        f"🏷️ Entry Price: {self.entry:.4f}\n"
@@ -1080,8 +800,8 @@ class IndicatorBot:
                        f"💵 Value: {executed_qty * self.entry:.2f} USDT\n"
                        f" Leverage: {self.lev}x\n"
                        f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n"
-                       f"🔥 **TOTAL SCORE: {total_score:+.2f}**\n\n"
-                       f"{indicator_info}")
+                       f"🔥 **Volume Ratio: {volume_ratio:.2f}x** "
+                       f"(Current: {current_volume:.2f} | Closed: {closed_volume:.2f})")
             
             # Gửi Telegram (is_critical=True là mặc định)
             self.log(message, is_critical=True)
@@ -1113,7 +833,7 @@ class IndicatorBot:
                 if res:
                     price = float(res.get('avgPrice', 0))
                     
-                    # Tính ROI cho thông báo đóng lệnh (dùng hàm đã có trong 43)
+                    # Tính ROI cho thông báo đóng lệnh (dùng hàm đã có)
                     roi = self.calculate_roi() 
 
                     message = (f"⛔ <b>POSITION CLOSED {self.symbol}</b>\n"
@@ -1137,7 +857,7 @@ class IndicatorBot:
         except Exception as e:
             self.log(f"❌ Error closing position: {str(e)}")
 
-# ========== BOT MANAGER ==========
+# ========== BOT MANAGER (Giữ nguyên) ==========
 class BotManager:
     def __init__(self):
         self.ws_manager = WebSocketManager()
@@ -1184,7 +904,8 @@ class BotManager:
                 return False
                 
             # Tạo bot
-            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager, initial_weights)
+            # Không cần truyền initial_weights nữa
+            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager)
             self.bots[symbol] = bot
             self.log(f"✅ Bot added: {symbol} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
             return True
@@ -1198,8 +919,7 @@ class BotManager:
         bot = self.bots.get(symbol)
         if bot:
             bot.stop()
-            if bot.status == "open":
-                bot.close_position("⛔ Manual bot stop")
+            # Bot sẽ tự đóng vị thế trong hàm stop
             self.log(f"⛔ Bot stopped for {symbol}")
             del self.bots[symbol]
             return True
@@ -1337,18 +1057,9 @@ class BotManager:
                         percent = user_state['percent']
                         tp = user_state['tp']
         
-                        # ✅ Training 200 nến trước khi tạo bot
-                        try:
-                            temp_config = [symbol, leverage, percent, tp, sl]
-                            perform_initial_training(self, [temp_config])  # training cho 1 symbol
-                            initial_weights = temp_config[5]
-                        except Exception as e:
-                            send_telegram(f"❌ Training thất bại cho {symbol}: {str(e)}", chat_id, create_menu_keyboard())
-                            self.user_states[chat_id] = {}
-                            return
-        
-                        # ✅ Chỉ tạo bot nếu training thành công
-                        if initial_weights and self.add_bot(symbol, leverage, percent, tp, sl, initial_weights):
+                        # KHÔNG CẦN TRAINING NỮA
+                        
+                        if self.add_bot(symbol, leverage, percent, tp, sl, initial_weights=None):
                             send_telegram(
                                 f"✅ <b>BOT ADDED SUCCESSFULLY</b>\n\n"
                                 f"📌 Pair: {symbol}\n"
@@ -1360,7 +1071,7 @@ class BotManager:
                                 create_menu_keyboard()
                             )
                         else:
-                            send_telegram("❌ Could not add bot (training failed)", chat_id, create_menu_keyboard())
+                            send_telegram("❌ Could not add bot (API error or invalid symbol)", chat_id, create_menu_keyboard())
                         
                         self.user_states[chat_id] = {}
                     else:
@@ -1438,131 +1149,30 @@ class BotManager:
         elif text:
             self.send_main_menu(chat_id)
 
-# ========== FUNCTIONS FOR INITIAL TRAINING ==========
+# ========== FUNCTIONS FOR INITIAL TRAINING (Bị xóa vì không dùng weights) ==========
 def perform_initial_training(manager, bot_configs):
-    """
-    Performs initial training on historical data for all bot configurations.
-    Sử dụng 200 nến lịch sử để huấn luyện ban đầu.
-    """
-    if not bot_configs:
-        manager.log("⚠️ No bot configurations found for training.")
-        return
-
-    manager.log("⏳ Starting initial training on 200 candles historical data...")
-
+    """ Hàm này bị giữ lại rỗng để tránh lỗi nếu có nơi nào gọi đến """
+    manager.log("⚠️ Initial training function is disabled (Volume logic in use).")
     for config in bot_configs:
-        try:
-            symbol = config[0]
-
-            # Khởi tạo điểm số cho từng chỉ báo
-            indicator_stats = {
-                "RSI": 0, "MACD": 0, "EMA_Crossover": 0, "Volume_Confirmation": 0,
-                "Stochastic": 0, "BollingerBands": 0, "Ichimoku": 0, "ADX": 0,
-            }
-
-            # Lấy 200 nến lịch sử để huấn luyện
-            df_history = get_klines(symbol, '15m', 200)
-
-            if not df_history.empty and len(df_history) >= 100:
-                manager.log(f"🚀 Training {symbol} with {len(df_history)} candles...")
-
-                # ✅ Tính indicators cho toàn bộ 200 nến một lần duy nhất
-                df_history = add_technical_indicators(df_history)
-
-                # Huấn luyện trên từng nến (bắt đầu từ nến 50 cho an toàn)
-                for i in range(50, len(df_history) - 1):
-                    try:
-                        if df_history.iloc[i].isnull().any():
-                            continue
-
-                        df_slice = df_history.iloc[:i+1]
-                        current_signals = get_raw_indicator_signals(df_slice)
-
-                        current_close = df_history['close'].iloc[i]
-                        next_open = df_history['open'].iloc[i+1]
-                        price_change_percent = ((next_open - current_close) / current_close) * 100
-
-                        is_price_up = price_change_percent > 0
-                        is_price_down = price_change_percent < 0
-
-                        # Cập nhật điểm: đúng +1, sai -1
-                        for indicator, signal in current_signals.items():
-                            if indicator in indicator_stats:
-                                if (signal == 1 and is_price_up) or (signal == -1 and is_price_down):
-                                    indicator_stats[indicator] += 1
-                                elif (signal == 1 and is_price_down) or (signal == -1 and is_price_up):
-                                    indicator_stats[indicator] -= 1
-
-                    except Exception:
-                        continue
-
-                # ✅ Dùng tổng score có dấu để tạo trọng số
-                total_abs_score = sum(abs(score) for score in indicator_stats.values())
-
-                if total_abs_score > 0:
-                    # Trọng số CÓ DẤU (có thể âm)
-                    indicator_weights = {
-                        ind: (score / total_abs_score) * 100
-                        for ind, score in indicator_stats.items()
-                    }
-                else:
-                    # Nếu tất cả score đều bằng 0, dùng trọng số mặc định dương
-                    num_indicators = len(indicator_stats)
-                    indicator_weights = {ind: 100.0 / num_indicators for ind in indicator_stats.keys()}
-
-                # Lưu weights vào config
-                if len(config) == 5:
-                    config.append(indicator_weights)
-                elif len(config) > 5:
-                    config[5] = indicator_weights
-                else:
-                    while len(config) < 5:
-                        config.append(None)
-                    config.append(indicator_weights)
-
-                # Log kết quả
-                score_info = " | ".join([f"{k}: {v:+d}" for k, v in indicator_stats.items()])
-                weight_info = " | ".join([f"{k}: {v:.1f}%" for k, v in indicator_weights.items()])
-
-                manager.log(f"✅ Training completed for {symbol}")
-                manager.log(f"📊 Scores: {score_info}")
-                manager.log(f"🎯 Weights: {weight_info}")
-
-            else:
-                manager.log(f"❌ Not enough data for {symbol} (got {len(df_history)} candles)")
-                if len(config) == 5:
-                    config.append(None)
-
-        except Exception as e:
-            manager.log(f"❌ Training error for {symbol}: {str(e)}")
-            if len(config) == 5:
-                config.append(None)
+        if len(config) == 5:
+            config.append(None) # Đảm bảo config có 6 phần tử để tránh lỗi index
 
 # ========== MAIN FUNCTION ==========
 def main():
     manager = BotManager()
 
-    # Huấn luyện ban đầu với 200 nến
     if BOT_CONFIGS:
-        perform_initial_training(manager, BOT_CONFIGS)
-        
-        # DEBUG: Kiểm tra kết quả training
-        manager.log("🔍 KIỂM TRA KẾT QUẢ TRAINING:")
-        for i, config in enumerate(BOT_CONFIGS):
-            if len(config) > 5 and config[5] is not None:
-                manager.log(f"✅ Config {i}: {config[0]} - Có weights từ training")
-            else:
-                manager.log(f"❌ Config {i}: {config[0]} - KHÔNG có weights từ training")
+        # Gọi hàm training rỗng để đảm bảo BOT_CONFIGS có 6 phần tử (dù không dùng weights)
+        perform_initial_training(manager, BOT_CONFIGS) 
         
         for config in BOT_CONFIGS:
             if len(config) >= 5:
+                # Lấy 5 tham số chính
                 symbol, lev, percent, tp, sl = config[0], config[1], config[2], config[3], config[4]
                 
-                # FIX: Lấy weights từ index 5 (sau training)
-                initial_weights = config[5] if len(config) > 5 and config[5] is not None else None
-                
-                if manager.add_bot(symbol, lev, percent, tp, sl, initial_weights):
-                    manager.log(f"✅ Bot for {symbol} started successfully")
+                # initial_weights luôn là None
+                if manager.add_bot(symbol, lev, percent, tp, sl, initial_weights=None):
+                    manager.log(f"✅ Bot for {symbol} started successfully (Volume Logic)")
                 else:
                     manager.log(f"⚠️ Bot for {symbol} failed to start")
     else:
@@ -1586,20 +1196,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
