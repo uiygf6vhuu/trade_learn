@@ -1008,7 +1008,7 @@ class BotManager:
                         success_count = 0
                         message = f"✅ <b>ĐANG TẠO BOT CHO CÁC COIN BIẾN ĐỘNG >{threshold}%</b>\n\n"
                         
-                        for coin in volatile_coins[:10]:  # Giới hạn 10 coin
+                        for coin in volatile_coins[:100]:  # Giới hạn 10 coin
                             symbol = coin['symbol']
                             change_percent = coin['change_percent']
                             
@@ -1105,7 +1105,7 @@ class BotManager:
                 else:
                     message = "🎯 <b>COIN BIẾN ĐỘNG >30% (24H)</b>\n\n"
                     
-                    for coin in volatile_coins[:15]:  # Hiển thị 15 coin đầu
+                    for coin in volatile_coins[:20]:  # Hiển thị 15 coin đầu
                         arrow = "🟢" if coin['direction'] == "UP" else "🔴"
                         message += f"{arrow} {coin['symbol']}: {coin['change_percent']:.2f}%\n"
                     
@@ -1154,3 +1154,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
