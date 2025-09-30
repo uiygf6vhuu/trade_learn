@@ -44,7 +44,7 @@ except Exception as e:
 API_KEY = BINANCE_API_KEY
 API_SECRET = BINANCE_SECRET_KEY
 
-# ========== TELEGRAM FUNCTIONS (Giữ nguyên) ==========
+# ========== TELEGRAM FUNCTIONS ==========
 def send_telegram(message, chat_id=None, reply_markup=None):
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("Telegram Bot Token is not configured.")
@@ -169,6 +169,7 @@ def get_max_leverage(symbol):
         
         data = binance_api_request(url, headers=headers)
         if data and isinstance(data, list) and data:
+            # Lấy mức đòn bẩy tối đa (thường là bracket đầu tiên)
             return int(data[0]['brackets'][0]['initialLeverage'])
     except Exception as e:
         logger.error(f"Error getting max leverage for {symbol}: {str(e)}")
@@ -207,6 +208,7 @@ def find_eligible_symbols(min_leverage, min_change_percent=30.0):
         except ValueError:
             continue
             
+    # Sắp xếp theo biến động giảm dần
     eligible_symbols.sort(key=lambda x: abs(x['change']), reverse=True)
     
     return eligible_symbols
@@ -382,7 +384,6 @@ class WebSocketManager:
 # ========== MAIN BOT CLASS (Logic Dynamic Hunter) ==========
 class IndicatorBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h, max_leverage):
-        # symbol là symbol ban đầu được chọn
         self.symbol = symbol.upper()
         self.lev = lev
         self.percent = percent
@@ -390,22 +391,20 @@ class IndicatorBot:
         self.sl = sl
         self.ws_manager = ws_manager
         
-        # Lưu trữ các thông số cấu hình và trạng thái hiện tại
         self.initial_lev = lev
-        self.initial_symbol = symbol.upper()
+        self.initial_symbol = symbol.upper() # Symbol ban đầu (cho mục đích log và ID)
         self.current_max_leverage = max_leverage
         
-        # Target side được xác định dựa trên 24h change
         self.target_side = self._determine_target_side(change_24h) 
         self.current_change_24h = change_24h
 
-        # Kiểm tra vị thế đang mở (Đảm bảo lệnh có sẵn vẫn được quản lý)
+        # Kiểm tra vị thế đang mở
         self.check_position_status()
         self.status = "waiting"
         self.side = ""
         self.qty = 0
         self.entry = 0
-        self.prices = [] # Giá cho symbol hiện tại
+        self.prices = [] 
 
         self._stop = False
         self.position_open = False
@@ -413,9 +412,9 @@ class IndicatorBot:
         self.position_check_interval = 30
         self.last_position_check = 0
         self.last_error_log_time = 0
-        self.cooldown_period = 60 # Giảm cooldown để phản ứng nhanh khi đóng lệnh
+        self.cooldown_period = 60 # 60 giây cooldown để phản ứng nhanh khi đóng lệnh
         
-        self.log(f"🟢 Bot started for {self.initial_symbol} (Current: {self.symbol}) | Target: {self.target_side} | Lev: {self.lev}x")
+        self.log(f"🟢 Bot started | Current: {self.symbol} | Target: {self.target_side} | Lev: {self.lev}x")
 
         # Bắt đầu WebSocket cho symbol hiện tại
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
@@ -438,6 +437,7 @@ class IndicatorBot:
         return roi
 
     def log(self, message, is_critical=True):
+        # Log sử dụng Initial symbol và Current symbol
         logger.info(f"[{self.initial_symbol}/{self.symbol}] {message}") 
         if is_critical: send_telegram(f"<b>{self.initial_symbol} ({self.symbol})</b>: {message}")
 
@@ -500,10 +500,16 @@ class IndicatorBot:
                             new_target_side = self._determine_target_side(change_24h)
                             
                             if new_target_side:
-                                # Chuyển đổi symbol (kể cả khi symbol cũ vẫn là tốt nhất)
-                                self._update_symbol_and_stream(symbol, change_24h, max_leverage)
+                                # *** QUY TRÌNH CHUYỂN ĐỔI SYMBOL ***
+                                # Chuyển đổi symbol chỉ khi symbol tốt nhất khác symbol bot đang theo dõi
+                                if symbol != self.symbol:
+                                    self._update_symbol_and_stream(symbol, change_24h, max_leverage)
+                                else:
+                                    # Nếu symbol vẫn là tốt nhất, chỉ cập nhật trạng thái
+                                    self.current_change_24h = change_24h
+                                    self.current_max_leverage = max_leverage
                                 
-                                # Mở lệnh trên symbol hiện tại
+                                # Mở lệnh trên symbol hiện tại (đã được cập nhật nếu cần)
                                 self.log(f"🚀 Attempting to open {new_target_side} position on {self.symbol}...")
                                 self.open_position(new_target_side, change_24h=self.current_change_24h)
                                 self.last_trade_time = current_time
@@ -643,7 +649,7 @@ class IndicatorBot:
                 else: self.log("❌ Error closing position")
         except Exception as e: self.log(f"❌ Error closing position: {str(e)}")
 
-# ========== BOT MANAGER (Cập nhật logic tạo hàng loạt bot) ==========
+# ========== BOT MANAGER (Logic tạo hàng loạt bot) ==========
 class BotManager:
     def __init__(self):
         self.ws_manager = WebSocketManager()
