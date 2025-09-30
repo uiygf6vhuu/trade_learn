@@ -578,7 +578,7 @@ class IndicatorBot:
         except Exception as e:
             if time.time() - self.last_error_log_time > 30: self.log(f"TP/SL check error: {str(e)}"); self.last_error_log_time = time.time()
 
-    def open_position(self, side, change_24h): 
+    def open_position(self, side, current_volume=0, closed_volume=0): # Giữ nguyên tham số volume
         self.check_position_status()
         if self.position_open:
             self.log("⚠️ Position already open, skipping")
@@ -591,59 +591,69 @@ class IndicatorBot:
             balance = get_balance()
             if balance <= 0: self.log("❌ Insufficient USDT balance"); return
                 
+            # 1. XÁC ĐỊNH SỐ VỐN KÝ QUỸ (MARGIN)
             usdt_amount = balance * (min(max(self.percent, 1), 100) / 100)
+            
             price = get_current_price(self.symbol)
             if price <= 0: self.log("❌ Error getting price"); return
                 
             step = get_step_size(self.symbol)
             if step <= 0: step = 0.001
                 
-            # TÍNH TOÁN SỐ LƯỢNG (ĐÃ NHÂN ĐÒN BẨY)
-            qty_raw = (usdt_amount * self.lev) / price
+            # 2. TÍNH TOÁN GIÁ TRỊ DANH NGHĨA (NOTIONAL VALUE)
+            notional_value = usdt_amount * self.lev  # <--- BƯỚC NHÂN ĐÒN BẨY TRỰC TIẾP
+
+            # 3. TÍNH TOÁN SỐ LƯỢNG THÔ (Dựa trên Notional Value)
+            # qty_raw là số lượng coin tương ứng với giá trị danh nghĩa
+            qty_raw = notional_value / price
             
-            # LÀM TRÒN CHÍNH XÁC THEO LOT_SIZE
+            # 4. LÀM TRÒN CHÍNH XÁC THEO LOT_SIZE (STEP SIZE)
             steps = qty_raw / step
             qty = round(steps) * step # Làm tròn số bước, sau đó nhân lại với step
             
             qty = max(qty, step); qty = round(qty, 8)
             
-            # KIỂM TRA MIN NOTIONAL
-            notional_value = qty * price
-            MIN_NOTIONAL_SAFE = 0.0 # Ngưỡng an toàn
+            # 5. KIỂM TRA MIN NOTIONAL (Ngưỡng an toàn)
+            # Ngưỡng an toàn tối thiểu (thường là 5 USDT trên Binance Futures)
+            MIN_NOTIONAL_SAFE = 5.0 
 
-            if notional_value < MIN_NOTIONAL_SAFE:
-                 self.log(f"⚠️ Notional Value ({notional_value:.2f} USDT) too low. Min Notional likely violated. Skipping trade.", is_critical=True)
+            if qty * price < MIN_NOTIONAL_SAFE:
+                 # Ghi log chi tiết Notional để gỡ lỗi
+                 self.log(f"⚠️ Notional Value ({qty * price:.2f} USDT) too low (Min > {MIN_NOTIONAL_SAFE} USDT). Skipping trade.", is_critical=True)
                  return
             
             if qty < step: self.log(f"⚠️ Quantity too small: {qty} < {step}"); return
                 
+            # 6. ĐẶT LỆNH
             res = place_order(self.symbol, side, qty)
             if not res: self.log("❌ Error placing order"); return
                 
             executed_qty = float(res.get('executedQty', 0))
             if executed_qty < step: self.log(f"❌ Order not filled: {executed_qty}"); return
 
+            # 7. CẬP NHẬT TRẠNG THÁI
             self.entry = float(res.get('avgPrice', price))
             self.side = side
             self.qty = executed_qty if side == "BUY" else -executed_qty
             self.status = "open"
             self.position_open = True
 
+            # ... (Phần thông báo giữ nguyên) ...
+            volume_ratio = current_volume / closed_volume if closed_volume else 0
             message = (f"✅ <b>POSITION OPENED {self.symbol}</b>\n"
-                       f"📌 Strategy: Contrarian 24h ({change_24h:.2f}%)\n"
-                       f"➡️ Direction: {side}\n"
+                       f"📌 Direction: {side}\n"
                        f"🏷️ Entry Price: {self.entry:.4f}\n"
                        f"📊 Quantity: {executed_qty}\n"
-                       f"💵 Value: {executed_qty * self.entry:.2f} USDT\n"
+                       f"💵 Value (Notional): {executed_qty * self.entry:.2f} USDT\n"
                        f" Leverage: {self.lev}x\n"
-                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%")
+                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n"
+                       f"🔥 Volume Ratio: {volume_ratio:.2f}x")
             
             self.log(message, is_critical=True)
             
         except Exception as e:
             self.position_open = False
             self.log(f"❌ Error entering position: {str(e)}")
-
     def close_position(self, reason=""):
         try:
             cancel_all_orders(self.symbol)
@@ -948,4 +958,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
