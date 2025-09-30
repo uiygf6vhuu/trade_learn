@@ -613,7 +613,7 @@ class IndicatorBot:
             qty = max(qty, step); qty = round(qty, 8)
             
             # 5. KIỂM TRA MIN NOTIONAL (Ngưỡng an toàn)
-            MIN_NOTIONAL_SAFE = 5.0 # Ngưỡng an toàn 5 USDT
+            MIN_NOTIONAL_SAFE = 0.0 # Ngưỡng an toàn 5 USDT
 
             if qty * price < MIN_NOTIONAL_SAFE:
                  self.log(f"⚠️ Notional Value ({qty * price:.2f} USDT) too low (Min > {MIN_NOTIONAL_SAFE} USDT). Skipping trade.", is_critical=True)
@@ -954,3 +954,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
