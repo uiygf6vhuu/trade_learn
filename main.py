@@ -122,7 +122,7 @@ def sign(query):
 def binance_api_request(url, method='GET', params=None, headers=None):
     """
     General function for Binance API requests with DETAILED ERROR LOGGING.
-    Chức năng này đã được cải tiến để ghi lại lỗi chi tiết từ Binance API.
+    Chức năng này được cải tiến để ghi lại lỗi chi tiết từ Binance API.
     """
     max_retries = 3
     for attempt in range(max_retries):
@@ -240,7 +240,8 @@ def get_step_size(symbol):
         for s in data['symbols']:
             if s['symbol'] == symbol.upper():
                 for f in s['filters']:
-                    if f['filterType'] == 'LOT_SIZE': return float(f['stepSize'])
+                    if f['filterType'] == 'LOT_SIZE': 
+                        return float(f['stepSize'])
     except Exception as e: logger.error(f"Error getting step size: {str(e)}"); send_telegram(f"⚠️ <b>STEP SIZE ERROR:</b> {symbol} - {str(e)}")
     return 0.001
 
@@ -391,7 +392,7 @@ class WebSocketManager:
 
 # ========== MAIN BOT CLASS (Logic Dynamic Hunter) ==========
 class IndicatorBot:
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h, max_leverage):
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h, max_leverage, min_volatility):
         self.symbol = symbol.upper()
         self.lev = lev
         self.percent = percent
@@ -400,8 +401,9 @@ class IndicatorBot:
         self.ws_manager = ws_manager
         
         self.initial_lev = lev
-        self.initial_symbol = symbol.upper() # Symbol ban đầu (cho mục đích log và ID)
+        self.initial_symbol = symbol.upper()
         self.current_max_leverage = max_leverage
+        self.min_volatility = min_volatility # NGƯỠNG BIẾN ĐỘNG TỐI THIỂU MỚI
         
         self.target_side = self._determine_target_side(change_24h) 
         self.current_change_24h = change_24h
@@ -420,9 +422,9 @@ class IndicatorBot:
         self.position_check_interval = 30
         self.last_position_check = 0
         self.last_error_log_time = 0
-        self.cooldown_period = 60 # 60 giây cooldown để phản ứng nhanh khi đóng lệnh
+        self.cooldown_period = 60 # 60 giây cooldown
         
-        self.log(f"🟢 Bot started | Current: {self.symbol} | Target: {self.target_side} | Lev: {self.lev}x")
+        self.log(f"🟢 Bot started | Current: {self.symbol} | Target: {self.target_side} | Lev: {self.lev}x | Min Vol: {self.min_volatility}%")
 
         # Bắt đầu WebSocket cho symbol hiện tại
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
@@ -430,10 +432,10 @@ class IndicatorBot:
         self.thread.start()
 
     def _determine_target_side(self, change_24h):
-        """Xác định chiều vào lệnh ngược xu hướng 24h (>= 30%)."""
-        if change_24h <= -30.0:
+        """Xác định chiều vào lệnh ngược xu hướng 24h (>= Min Volatility)."""
+        if change_24h <= -self.min_volatility:
             return "BUY" 
-        elif change_24h >= 30.0:
+        elif change_24h >= self.min_volatility:
             return "SELL" 
         return None 
 
@@ -497,7 +499,7 @@ class IndicatorBot:
                         # Tự động tìm symbol tốt nhất
                         eligible_list = find_eligible_symbols(
                             min_leverage=self.initial_lev, 
-                            min_change_percent=30.0
+                            min_change_percent=self.min_volatility
                         )
                         
                         if eligible_list:
@@ -522,7 +524,7 @@ class IndicatorBot:
                                 self.open_position(new_target_side, change_24h=self.current_change_24h)
                                 self.last_trade_time = current_time
                             else:
-                                self.log(f"⚠️ Found {symbol} but 24h change ({change_24h:.2f}%) does not meet the 30% threshold for entry.")
+                                self.log(f"⚠️ Found {symbol} but 24h change ({change_24h:.2f}%) does not meet the {self.min_volatility}% threshold for entry.")
                         else:
                             self.log("⏳ No suitable high volatility symbol found. Waiting...")
                         
@@ -596,15 +598,22 @@ class IndicatorBot:
             step = get_step_size(self.symbol)
             if step <= 0: step = 0.001
                 
-            # Đã nhân đòn bẩy
-            qty = (usdt_amount * self.lev) / price
+            # TÍNH TOÁN SỐ LƯỢNG (ĐÃ NHÂN ĐÒN BẨY)
+            qty_raw = (usdt_amount * self.lev) / price
             
-            # LÀM TRÒN CHÍNH XÁC (Logic từ file 45)
-            # Chia số lượng thành các bước, làm tròn đến số nguyên gần nhất, sau đó nhân lại với step
-            steps = qty / step
-            qty = round(steps) * step
+            # LÀM TRÒN CHÍNH XÁC THEO LOT_SIZE
+            steps = qty_raw / step
+            qty = round(steps) * step # Làm tròn số bước, sau đó nhân lại với step
             
             qty = max(qty, step); qty = round(qty, 8)
+            
+            # KIỂM TRA MIN NOTIONAL
+            notional_value = qty * price
+            MIN_NOTIONAL_SAFE = 5.0 # Ngưỡng an toàn
+
+            if notional_value < MIN_NOTIONAL_SAFE:
+                 self.log(f"⚠️ Notional Value ({notional_value:.2f} USDT) too low. Min Notional likely violated. Skipping trade.", is_critical=True)
+                 return
             
             if qty < step: self.log(f"⚠️ Quantity too small: {qty} < {step}"); return
                 
@@ -612,7 +621,7 @@ class IndicatorBot:
             if not res: self.log("❌ Error placing order"); return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty < step: self.log(f"❌ Order not filled: {executed_qty}"); return # Kiểm tra lại Fill
+            if executed_qty < step: self.log(f"❌ Order not filled: {executed_qty}"); return
 
             self.entry = float(res.get('avgPrice', price))
             self.side = side
@@ -692,7 +701,7 @@ class BotManager:
         welcome = "🤖 <b>BINANCE FUTURES TRADING BOT (Dynamic Contrarian 24h)</b>\n\nChoose an option below:"
         send_telegram(welcome, chat_id, create_menu_keyboard())
 
-    def add_bot(self, symbol, lev, percent, tp, sl, change_24h, max_leverage):
+    def add_bot(self, symbol, lev, percent, tp, sl, change_24h, max_leverage, min_volatility):
         if sl == 0: sl = None
         symbol = symbol.upper()
         
@@ -708,9 +717,9 @@ class BotManager:
                 self.log(f"❌ Cannot get price for {symbol}")
                 return False
                 
-            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager, change_24h, max_leverage)
+            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager, change_24h, max_leverage, min_volatility)
             self.bots[bot_id] = bot
-            self.log(f"✅ Bot added: {bot_id} | Pair: {symbol} | Lev: {lev}x (Max {max_leverage}x) | %: {percent} | TP/SL: {tp}%/{sl}%")
+            self.log(f"✅ Bot added: {bot_id} | Pair: {symbol} | Vol: {min_volatility}% | Lev: {lev}x (Max {max_leverage}x) | %: {percent} | TP/SL: {tp}%/{sl}%")
             return True
             
         except Exception as e:
@@ -784,7 +793,7 @@ class BotManager:
                 leverage = int(text.replace('', '').replace('x', '').strip())
                 user_state['leverage'] = leverage
                 user_state['step'] = 'waiting_percent'
-                send_telegram(f"Bước 2/4: Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
+                send_telegram(f"Bước 2/5: Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
                 
         elif current_step == 'waiting_percent':
             if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
@@ -794,7 +803,7 @@ class BotManager:
                     if 1 <= percent <= 100:
                         user_state['percent'] = percent
                         user_state['step'] = 'waiting_tp'
-                        send_telegram(f"Bước 3/4: Enter % Take Profit (e.g., 10):", chat_id, create_cancel_keyboard())
+                        send_telegram(f"Bước 3/5: Enter % Take Profit (e.g., 10):", chat_id, create_cancel_keyboard())
                     else: send_telegram("⚠️ Please enter a % from 1-100", chat_id)
                 except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
                     
@@ -806,7 +815,7 @@ class BotManager:
                     if tp > 0:
                         user_state['tp'] = tp
                         user_state['step'] = 'waiting_sl'
-                        send_telegram(f"Bước 4/4: Enter % Stop Loss (e.g., 5, 0 for no SL):", chat_id, create_cancel_keyboard())
+                        send_telegram(f"Bước 4/5: Enter % Stop Loss (e.g., 5, 0 for no SL):", chat_id, create_cancel_keyboard())
                     else: send_telegram("⚠️ TP must be greater than 0", chat_id)
                 except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
                     
@@ -816,14 +825,28 @@ class BotManager:
                 try:
                     sl = float(text)
                     if sl >= 0:
+                        user_state['sl'] = sl
+                        user_state['step'] = 'waiting_min_volatility' # BƯỚC MỚI
+                        send_telegram("Bước 5/5: Enter Min Volatility % (e.g., 30):", chat_id, create_cancel_keyboard())
+                    else: send_telegram("⚠️ SL must be greater than or equal to 0", chat_id)
+                except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
+
+        elif current_step == 'waiting_min_volatility':
+            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            else:
+                try:
+                    min_volatility = float(text)
+                    if min_volatility > 0:
                         leverage = user_state['leverage']
                         percent = user_state['percent']
                         tp = user_state['tp']
+                        sl = user_state['sl']
                         
                         # ========= LOGIC TẠO HÀNG LOẠT BOT ==========
-                        send_telegram(f"🔍 Đang tìm kiếm TẤT CẢ đồng coin phù hợp (Leverage {leverage}x, Biến động > 30%)...", chat_id)
+                        send_telegram(f"🔍 Đang tìm kiếm TẤT CẢ đồng coin phù hợp (Leverage {leverage}x, Biến động > {min_volatility}%)...", chat_id)
                         
-                        eligible_symbols = find_eligible_symbols(min_leverage=leverage, min_change_percent=30.0)
+                        # Dùng ngưỡng linh hoạt
+                        eligible_symbols = find_eligible_symbols(min_leverage=leverage, min_change_percent=min_volatility)
                         
                         if not eligible_symbols:
                             send_telegram("❌ Không tìm thấy đồng coin nào phù hợp với đòn bẩy và biến động yêu cầu.", chat_id, create_menu_keyboard())
@@ -837,18 +860,19 @@ class BotManager:
                             change_24h = entry['change']
                             max_leverage = entry['max_leverage']
                             
-                            if self.add_bot(symbol, leverage, percent, tp, sl, change_24h, max_leverage):
+                            # Truyền min_volatility vào add_bot
+                            if self.add_bot(symbol, leverage, percent, tp, sl, change_24h, max_leverage, min_volatility): 
                                 success_count += 1
                         
                         send_telegram(
                             f"✅ <b>TẠO HÀNG LOẠT BOT HOÀN TẤT</b>\n\n"
                             f"Đã tạo thành công **{success_count}** bot. Mỗi bot là một thợ săn độc lập.\n"
-                            f"Các bot sẽ bắt đầu giao dịch ngay sau khi cooldown kết thúc.",
+                            f"Ngưỡng Volatility: **{min_volatility}%**",
                             chat_id,
                             create_menu_keyboard()
                         )
                         self.user_states[chat_id] = {}
-                    else: send_telegram("⚠️ SL must be greater than or equal to 0", chat_id)
+                    else: send_telegram("⚠️ Min Volatility must be greater than 0", chat_id)
                 except Exception as e:
                     self.log(f"Mass creation error: {str(e)}", is_critical=True)
                     send_telegram("⚠️ Invalid value or API error during mass creation.", chat_id, create_menu_keyboard())
@@ -866,7 +890,7 @@ class BotManager:
                 
         elif text == "➕ Thêm Bot":
             self.user_states[chat_id] = {'step': 'waiting_leverage'}
-            send_telegram("Bước 1/4: Choose leverage for the new bot:", chat_id, create_leverage_keyboard())
+            send_telegram("Bước 1/5: Choose leverage for the new bot:", chat_id, create_leverage_keyboard())
             
         elif text == "⛔ Dừng Bot":
             if not self.bots: send_telegram("🤖 No bots are currently running", chat_id)
