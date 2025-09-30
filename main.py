@@ -182,7 +182,6 @@ def get_max_leverage(symbol):
         
         data = binance_api_request(url, headers=headers)
         if data and isinstance(data, list) and data:
-            # Lấy initialLeverage của bracket đầu tiên
             return int(data[0]['brackets'][0]['initialLeverage'])
     except Exception as e:
         logger.error(f"Error getting max leverage for {symbol}: {str(e)}")
@@ -210,7 +209,6 @@ def find_eligible_symbols(min_leverage, min_change_percent):
             
         try:
             price_change_percent = float(price_change_percent_str)
-            # Kiểm tra biến động (giá trị tuyệt đối)
             if abs(price_change_percent) >= min_change_percent:
                 max_lev = get_max_leverage(symbol)
                 if max_lev >= min_leverage:
@@ -346,13 +344,12 @@ class WebSocketManager:
     def add_symbol(self, symbol, callback):
         symbol = symbol.upper()
         with self._lock:
-            # Dùng stream aggTrade để có giá nhanh hơn (từ file 47)
             if symbol not in self.connections:
                 self._create_connection(symbol, callback)
 
     def _create_connection(self, symbol, callback):
         if self._stop_event.is_set(): return
-        # Dùng aggTrade stream (từ file 47)
+        # Dùng aggTrade stream để có giá nhanh nhất
         stream = f"{symbol.lower()}@aggTrade"
         url = f"wss://fstream.binance.com/ws/{stream}"
 
@@ -399,7 +396,7 @@ class WebSocketManager:
         self._stop_event.set()
         for symbol in list(self.connections.keys()): self.remove_symbol(symbol)
 
-# ========== MAIN BOT CLASS (Dynamic Hunter Logic) ==========
+# ========== MAIN BOT CLASS (Logic Dynamic Hunter) ==========
 class IndicatorBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h, max_leverage, min_volatility):
         self.initial_symbol = symbol.upper() # Symbol ban đầu được tạo
@@ -412,7 +409,7 @@ class IndicatorBot:
         
         self.initial_lev = lev
         self.current_max_leverage = max_leverage
-        self.min_volatility = min_volatility # NGƯỠNG BIẾN ĐỘNG TỐI THIỂU MỚI
+        self.min_volatility = min_volatility # NGƯỠNG BIẾN ĐỘNG TỐI THIỂU
         
         self.target_side = self._determine_target_side(change_24h) 
         self.current_change_24h = change_24h
@@ -530,7 +527,6 @@ class IndicatorBot:
                                 
                                 # Mở lệnh trên symbol hiện tại (đã được cập nhật nếu cần)
                                 self.log(f"🚀 Attempting to open {new_target_side} position on {self.symbol}...")
-                                # Cần đảm bảo volume truyền vào là 0 (hoặc None) vì logic này không dùng volume
                                 self.open_position(new_target_side) 
                                 self.last_trade_time = current_time
                             else:
@@ -588,7 +584,7 @@ class IndicatorBot:
         except Exception as e:
             if time.time() - self.last_error_log_time > 30: self.log(f"TP/SL check error: {str(e)}"); self.last_error_log_time = time.time()
 
-    def open_position(self, side): # Bỏ tham số volume không dùng
+    def open_position(self, side):
         self.check_position_status()
         if self.position_open:
             self.log("⚠️ Position already open, skipping")
@@ -596,7 +592,6 @@ class IndicatorBot:
             
         try:
             cancel_all_orders(self.symbol)
-            # Dùng leverage đã được kiểm tra tính hợp lệ
             if not set_leverage(self.symbol, self.lev): self.log(f"❌ Could not set leverage to {self.lev}"); return
                 
             balance = get_balance()
@@ -610,25 +605,24 @@ class IndicatorBot:
                 
             step = get_step_size(self.symbol)
             if step <= 0: step = 0.001
+            
+            # === LOGIC TÍNH TOÁN VÀ LÀM TRÒN TỪ FILE 45 ĐÃ XÁC NHẬN LÀM VIỆC VỚI SỐ DƯ NHỎ ===
+            
+            # Tính toán số lượng thô
+            qty = (usdt_amount * self.lev) / price
+            
+            # Làm tròn xuống theo step (Sử dụng math.floor như file 45)
+            if step > 0:
+                qty = math.floor(qty / step) * step
                 
-            # 2. TÍNH TOÁN GIÁ TRỊ DANH NGHĨA (NOTIONAL VALUE)
-            notional_value = usdt_amount * self.lev  # <--- BƯỚC NHÂN ĐÒN BẨY
-            # YÊU CẦU: Số lượng vào lệnh được tính bằng số dư thực tế nhân đòn bẩy
-            # notional_value = margin * leverage = (balance * percent/100) * leverage
-            
-            # 3. TÍNH TOÁN SỐ LƯỢNG THÔ (Dựa trên Notional Value)
-            qty_raw = notional_value / price
-            
-            # 4. LÀM TRÒN CHÍNH XÁC THEO LOT_SIZE (STEP SIZE)
-            steps = qty_raw / step
-            qty = round(steps) * step # Làm tròn số bước, sau đó nhân lại với step
-            
-            qty = max(qty, step); qty = round(qty, 8)
+            qty = max(qty, step) # Đảm bảo không nhỏ hơn step size
+            qty = round(qty, 8)
             
             # 5. KIỂM TRA MIN NOTIONAL (Ngưỡng an toàn)
             MIN_NOTIONAL_SAFE = 5.0 
 
             if qty * price < MIN_NOTIONAL_SAFE:
+                 # Nếu sau khi làm tròn, giá trị vẫn quá nhỏ (như 2.36 USDT)
                  self.log(f"⚠️ Notional Value ({qty * price:.2f} USDT) too low (Min > {MIN_NOTIONAL_SAFE} USDT). Skipping trade.", is_critical=True)
                  return
             
@@ -721,7 +715,7 @@ class BotManager:
 
     def add_bot(self, symbol, lev, percent, tp, sl, change_24h, max_leverage, min_volatility):
         if sl == 0: sl = None
-        symbol_id = f"BOT_{symbol}_{lev}x" # Dùng symbol ban đầu để làm ID (BOT_BTCUSDT_20x)
+        symbol_id = f"BOT_{symbol}_{lev}x" # Dùng symbol ban đầu để làm ID 
         
         if symbol_id in self.bots:
             self.log(f"⚠️ Bot already exists for {symbol_id}")
@@ -859,7 +853,7 @@ class BotManager:
                     else: send_telegram("⚠️ SL must be greater than or equal to 0", chat_id)
                 except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
 
-        # BƯỚC 5/5: Min Volatility
+        # BƯỚC 5/5: Min Volatility -> Tạo Bot Hàng Loạt
         elif current_step == 'waiting_min_volatility':
             if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             else:
@@ -888,7 +882,6 @@ class BotManager:
                             change_24h = entry['change']
                             max_leverage = entry['max_leverage']
                             
-                            # Truyền tất cả tham số cần thiết
                             if self.add_bot(symbol, leverage, percent, tp, sl, change_24h, max_leverage, min_volatility): 
                                 success_count += 1
                         
@@ -914,13 +907,11 @@ class BotManager:
                 message = "🤖 <b>LIST OF RUNNING BOTS</b>\n\n"
                 for bot_id, bot in self.bots.items():
                     status = "🟢 Open" if bot.status == "open" else "🟡 Waiting"
-                    # Hiển thị Initial symbol và Current symbol
                     message += f"🔹 {bot_id} (Initial: {bot.initial_symbol}) | Current: {bot.symbol} | {status} | Lev: {bot.lev}x\n"
                 send_telegram(message, chat_id)
                 
         elif text == "➕ Thêm Bot":
             self.user_states[chat_id] = {'step': 'waiting_leverage'}
-            # Bắt đầu luồng hỏi Leverage -> Percent -> TP -> SL -> Min Volatility
             send_telegram("Bước 1/5: Choose leverage for the new bots:", chat_id, create_leverage_keyboard())
             
         elif text == "⛔ Dừng Bot":
@@ -928,7 +919,6 @@ class BotManager:
             else:
                 message = "⛔ <b>CHOOSE BOT TO STOP</b>\n\n"
                 keyboard = []; row = []
-                # Dùng bot_id là key (BOT_BTCUSDT_20x)
                 for bot_id, bot in self.bots.items():
                     message += f"🔹 {bot_id} ({bot.initial_symbol})\n"; row.append({"text": f"⛔ {bot_id}"})
                     if len(row) == 2: keyboard.append(row); row = []
