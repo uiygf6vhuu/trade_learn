@@ -120,7 +120,10 @@ def sign(query):
         return ""
 
 def binance_api_request(url, method='GET', params=None, headers=None):
-    """General function for Binance API requests with detailed error handling."""
+    """
+    General function for Binance API requests with DETAILED ERROR LOGGING.
+    Chức năng này đã được cải tiến để ghi lại lỗi chi tiết từ Binance API.
+    """
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -137,14 +140,20 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                 if response.status == 200:
                     return json.loads(response.read().decode())
                 else:
-                    logger.error(f"API Error ({response.status}): {response.read().decode()}")
+                    # Ghi lỗi chi tiết từ Binance khi HTTP Status không phải 200
+                    error_response = response.read().decode()
+                    logger.error(f"API Error ({response.status}): {error_response}")
+                    
                     if response.status == 429:
                         time.sleep(2 ** attempt)
                     elif response.status >= 500:
                         time.sleep(1)
                     continue
         except urllib.error.HTTPError as e:
-            logger.error(f"HTTP Error ({e.code}): {e.reason}")
+            # Ghi lỗi chi tiết từ HTTP Error
+            error_response = e.read().decode()
+            logger.error(f"HTTP Error ({e.code}): {e.reason}. Detail: {error_response}")
+            
             if e.code == 429:
                 time.sleep(2 ** attempt)
             elif e.code >= 500:
@@ -169,7 +178,6 @@ def get_max_leverage(symbol):
         
         data = binance_api_request(url, headers=headers)
         if data and isinstance(data, list) and data:
-            # Lấy mức đòn bẩy tối đa (thường là bracket đầu tiên)
             return int(data[0]['brackets'][0]['initialLeverage'])
     except Exception as e:
         logger.error(f"Error getting max leverage for {symbol}: {str(e)}")
@@ -588,18 +596,24 @@ class IndicatorBot:
             step = get_step_size(self.symbol)
             if step <= 0: step = 0.001
                 
+            # Đã nhân đòn bẩy
             qty = (usdt_amount * self.lev) / price
-            if step > 0: qty = math.floor(qty / step) * step
-                
+            
+            # LÀM TRÒN CHÍNH XÁC (Logic từ file 45)
+            # Chia số lượng thành các bước, làm tròn đến số nguyên gần nhất, sau đó nhân lại với step
+            steps = qty / step
+            qty = round(steps) * step
+            
             qty = max(qty, step); qty = round(qty, 8)
+            
             if qty < step: self.log(f"⚠️ Quantity too small: {qty} < {step}"); return
                 
             res = place_order(self.symbol, side, qty)
             if not res: self.log("❌ Error placing order"); return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty < 0: self.log(f"❌ Order not filled: {executed_qty}"); return
-                
+            if executed_qty < step: self.log(f"❌ Order not filled: {executed_qty}"); return # Kiểm tra lại Fill
+
             self.entry = float(res.get('avgPrice', price))
             self.side = side
             self.qty = executed_qty if side == "BUY" else -executed_qty
@@ -628,7 +642,12 @@ class IndicatorBot:
                 close_side = "SELL" if self.side == "BUY" else "BUY"
                 close_qty = abs(self.qty)
                 step = get_step_size(self.symbol)
-                if step > 0: close_qty = round(close_qty / step) * step
+                
+                if step > 0: 
+                    # LÀM TRÒN CHÍNH XÁC KHI ĐÓNG LỆNH
+                    steps = close_qty / step
+                    close_qty = round(steps) * step
+                
                 close_qty = max(close_qty, 0); close_qty = round(close_qty, 8)
                 
                 res = place_order(self.symbol, close_side, close_qty)
