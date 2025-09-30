@@ -36,7 +36,6 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 # Get bot configuration from environment variables (JSON format)
 bot_config_json = os.getenv('BOT_CONFIGS', '[]')
 try:
-    # BOT_CONFIGS không còn cần initial_weights
     BOT_CONFIGS = json.loads(bot_config_json)
 except Exception as e:
     logging.error(f"Error parsing BOT_CONFIGS: {e}")
@@ -96,7 +95,7 @@ def create_cancel_keyboard():
     }
 
 def create_symbols_keyboard():
-    """Creates a keyboard for selecting coin pairs."""
+    """Creates a keyboard for selecting coin pairs. (Đã loại bỏ trong logic mới)"""
     popular_symbols = ["SUIUSDT", "DOGEUSDT", "1000PEPEUSDT", "TRUMPUSDT", "XRPUSDT", "ADAUSDT"]
     keyboard = []
     row = []
@@ -181,6 +180,49 @@ def binance_api_request(url, method='GET', params=None, headers=None):
 
     logger.error(f"Failed to make API request after {max_retries} attempts")
     return None
+
+# Hàm mới để tìm đồng coin biến động mạnh
+def find_high_volatility_symbol(min_change_percent=30.0):
+    """
+    Tìm symbol có biến động giá 24h (dạng %) lớn hơn hoặc bằng min_change_percent.
+    Ưu tiên các cặp giao dịch với USDT trên thị trường Futures.
+    Trả về symbol và phần trăm thay đổi 24h.
+    """
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    
+    data = binance_api_request(url) 
+    if not data:
+        logger.error("Could not get 24hr Ticker data from Futures API.")
+        return None, 0.0
+
+    high_volatility_symbols = []
+
+    for ticker in data:
+        symbol = ticker.get('symbol')
+        price_change_percent_str = ticker.get('priceChangePercent')
+        
+        if not symbol or not price_change_percent_str:
+            continue
+            
+        try:
+            price_change_percent = float(price_change_percent_str)
+            if symbol.endswith('USDT'):
+                if abs(price_change_percent) >= min_change_percent:
+                    high_volatility_symbols.append({
+                        "symbol": symbol,
+                        "change": price_change_percent
+                    })
+        except ValueError:
+            continue
+            
+    if not high_volatility_symbols:
+        return None, 0.0
+
+    # Lấy đồng có biến động mạnh nhất (theo giá trị tuyệt đối)
+    chosen = max(high_volatility_symbols, key=lambda x: abs(x['change']))
+
+    return chosen['symbol'], chosen['change']
+
 
 def get_step_size(symbol):
     url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
@@ -316,104 +358,14 @@ def get_positions(symbol=None):
         send_telegram(f"⚠️ <b>POSITIONS ERROR:</b> {symbol if symbol else ''} - {str(e)}")
     return []
 
-def get_klines(symbol, interval, limit=200):
-    """Lấy dữ liệu nến với xử lý lỗi tốt hơn"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
-            data = binance_api_request(url)
-            
-            if data and len(data) > 0:
-                df = pd.DataFrame(data, columns=["open_time", "open", "high", "low", "close", "volume", 
-                                               "close_time", "quote_asset_volume", "number_of_trades", 
-                                               "taker_buy_base", "taker_buy_quote", "ignore"])
-                # Chuyển đổi kiểu dữ liệu
-                numeric_columns = ["open", "high", "low", "close", "volume"]
-                for col in numeric_columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                # Loại bỏ NaN values
-                df = df.dropna()
-                return df
-                
-        except Exception as e:
-            logger.error(f"Error getting klines for {symbol}: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(1)
-    
-    return pd.DataFrame()
-
-# ========== TECHNICAL INDICATORS (ĐƠN GIẢN HÓA) ==========
-
-def add_technical_indicators(df):
-    """
-    Chỉ giữ lại dữ liệu thô (open, close, volume) cần thiết cho chiến lược Volume.
-    """
-    if df.empty or len(df) < 2:
-        return df
-
-    # Đảm bảo các cột số là kiểu số
-    numeric_columns = ["open", "high", "low", "close", "volume"]
-    for col in numeric_columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-    df = df.dropna(subset=numeric_columns)
-    
-    # Giữ lại các cột quan trọng
-    df = df[["open_time", "close_time", "open", "close", "volume"]]
-
-    return df
+# Xóa bỏ các hàm liên quan đến nến và chỉ báo cũ:
+# def get_klines(symbol, interval, limit=200): ...
+# def add_technical_indicators(df): ...
+# def get_signal(df): ...
 
 # ========== SIGNAL FUNCTIONS (LOGIC MỚI THEO YÊU CẦU) ==========
-
-def get_signal(df):
-    """
-    Tính tín hiệu dựa trên:
-    1. So sánh Volume nến VỪA ĐÓNG với nến ĐANG CHẠY.
-    2. Hướng của nến đang chạy (xanh/đỏ).
-    
-    Tín hiệu được tạo nếu Volume_Current > 1.2 * Volume_Closed.
-    """
-    # Cần ít nhất 2 nến để so sánh (nến vừa đóng và nến đang chạy)
-    if len(df) < 2:
-        return None, None
-        
-    # Nến vừa đóng (Closed Candle)
-    closed_candle = df.iloc[-2]
-    closed_volume = closed_candle['volume']
-    
-    # Nến đang chạy (Current/Forming Candle)
-    current_candle = df.iloc[-1]
-    current_volume = current_candle['volume']
-    
-    # Xác định hướng nến đang chạy
-    is_green_candle = current_candle['close'] > current_candle['open']
-    is_red_candle = current_candle['close'] < current_candle['open']
-
-    # Kiểm tra điều kiện Volume
-    volume_condition_met = current_volume > (closed_volume * 2)
-    
-    signal = None
-    
-    if volume_condition_met:
-        if is_green_candle:
-            signal = "BUY"
-        elif is_red_candle:
-            signal = "SELL"
-            
-    # Trả về tín hiệu, và Volume hiện tại/đóng để log
-    volume_data = {
-        "Current_Volume": current_volume, 
-        "Closed_Volume": closed_volume
-    }
-    return signal, volume_data
-
 def update_weights_and_stats(*args):
-    """
-    Hàm này không còn cần thiết và được giữ lại ở dạng tối giản để tránh lỗi.
-    """
-    # Không thực hiện điều chỉnh trọng số
+    """Hàm này không còn cần thiết và được giữ lại ở dạng tối giản để tránh lỗi."""
     indicator_weights = args[2] if len(args) > 2 and isinstance(args[2], dict) else {}
     indicator_stats = args[3] if len(args) > 3 and isinstance(args[3], dict) else {}
     return indicator_weights, indicator_stats
@@ -436,7 +388,7 @@ class WebSocketManager:
         if self._stop_event.is_set():
             return
 
-        stream = f"{symbol.lower()}@trade"
+        stream = f"{symbol.lower()}@aggTrade" # Dùng aggTrade để nhẹ hơn
         url = f"wss://fstream.binance.com/ws/{stream}"
 
         def on_message(ws, message):
@@ -505,7 +457,8 @@ class WebSocketManager:
 
 # ========== MAIN BOT CLASS ==========
 class IndicatorBot:
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, initial_weights=None):
+    # THÊM THAM SỐ change_24h
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h):
         self.symbol = symbol.upper()
         self.lev = lev
         self.percent = percent
@@ -513,10 +466,9 @@ class IndicatorBot:
         self.sl = sl
         self.ws_manager = ws_manager
         
-        # Xóa/Đơn giản hóa logic weights/stats
-        self.indicator_weights = {} 
-        self.indicator_stats = {} 
-        
+        self.change_24h = change_24h 
+        self.target_side = self._determine_target_side() # XÁC ĐỊNH CHIỀU VÀO LỆNH
+
         self.check_position_status()
         self.status = "waiting"
         self.side = ""
@@ -525,31 +477,35 @@ class IndicatorBot:
         self.prices = []
 
         self._stop = False
-        self.signal_threshold = 0 # Không dùng ngưỡng
         self.position_open = False
         self.last_trade_time = 0
         self.position_check_interval = 30
         self.last_position_check = 0
         self.last_error_log_time = 0
-        self.last_close_time = 0
-        # Đã sửa: Cooldown 60s
-        self.cooldown_period = 60 
-        self.max_position_attempts = 3
-        self.position_attempt_count = 0
-        self.last_candle_timestamp = 0 # Dùng để theo dõi nến vừa đóng
+        self.cooldown_period = 900
+        
+        self.log(f"🟢 Bot started for {self.symbol} | Strategy: Contrarian 24h ({self.change_24h:.2f}%) | Target: {self.target_side}")
 
         # Bắt đầu WebSocket và main loop
-        self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-        # Đã sửa: Logic thành Volume 1m
-        self.log(f"🟢 Bot started for {self.symbol} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}% | Logic: Volume 1m")
+        if self.target_side:
+            self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+        else:
+            self.log("⚠️ Cannot determine target side (24h change is 0), bot not starting trade loop.")
+
+
+    def _determine_target_side(self):
+        """Xác định chiều vào lệnh ngược xu hướng 24h."""
+        if self.change_24h < 0:
+            return "BUY" # Giảm mạnh -> Bắt đáy (LONG)
+        elif self.change_24h > 0:
+            return "SELL" # Tăng mạnh -> Bắt đỉnh (SHORT)
+        return None # Không xác định
 
 
     def calculate_roi(self):
-        """
-        Tính ROI (%) của vị thế hiện tại.
-        """
+        """Tính ROI (%) của vị thế hiện tại."""
         if not self.position_open or self.entry == 0:
             return 0.0
         
@@ -582,10 +538,9 @@ class IndicatorBot:
             if self.position_open:
                 self.check_tp_sl()
 
-
     def _run(self):
-        """Main loop với xử lý nến 1 phút"""
-        self.log("🔍 Starting main loop with 1-minute candle processing...")
+        """Main loop đơn giản: Kiểm tra vị thế và mở lệnh nếu chưa có."""
+        self.log("🔍 Starting main loop (Contrarian 24h).")
         
         while not self._stop:
             try:
@@ -596,68 +551,22 @@ class IndicatorBot:
                     self.check_position_status()
                     self.last_position_check = current_time
                     
-                # Đã sửa: Lấy dữ liệu nến 1 phút
-                df = get_klines(self.symbol, "1m", 10) 
-                if df.empty or len(df) < 2:
-                    time.sleep(1)
-                    continue
-
-                # Chỉ cần thêm các cột thô (Volume, Open, Close)
-                df = add_technical_indicators(df)
-                
-                # Kiểm tra dữ liệu hợp lệ
-                if df.iloc[-1].isnull().any():
-                    time.sleep(1)
-                    continue
-                    
-                # Phát hiện nến vừa đóng hoàn toàn
-                latest_closed_candle_timestamp = df['close_time'].iloc[-2] / 1000 
-                
-                if latest_closed_candle_timestamp > self.last_candle_timestamp:
-                    self.last_candle_timestamp = latest_closed_candle_timestamp
-                    
-                    # Tính toán tín hiệu dựa trên 2 nến cuối (1 vừa đóng và 1 đang chạy)
-                    signal, volume_data = get_signal(df)
-                    
-                    current_volume = volume_data.get("Current_Volume", 0)
-                    closed_volume = volume_data.get("Closed_Volume", 0)
-                    
-                    # Đã sửa: Log thành Volume 1m
-                    log_msg = (f"📊 1m Volume Check | Current: {current_volume:.2f} | "
-                               f"Closed: {closed_volume:.2f} | Ratio: {current_volume/closed_volume if closed_volume else 0:.2f}x")
-                    self.log(log_msg, is_critical=False)
-                    
-                    # Xử lý lệnh
-                    if self.position_open:
-                        if (self.side == "BUY" and signal == "SELL"):
-                            # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
-                            roi = self.calculate_roi()  # hàm có sẵn trong bot
-                            if roi < 0 and roi != -5000 and roi != 5000:
-                                self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
-                                # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
-                        if (self.side == "SELL" and signal == "BUY"):
-                            # Đóng lệnh hiện tại trước, KHÔNG mở lệnh mới ngay
-                            roi = self.calculate_roi()  # hàm có sẵn trong bot
-                            if (roi < -100 or roi > 10) and roi != -5000 and roi != 5000:
-                                self.close_position(f"🔄 Đảo chiều: {self.side} → {signal} | ROI hiện tại: {roi:.2f}%")
-                                # Lệnh mới sẽ được mở ở vòng loop tiếp theo sau khi đóng hoàn tất
-                        else:
-                            self.check_tp_sl()  # Kiểm tra TP/SL
-                    else:
-                        # Vào lệnh mới nếu có tín hiệu
-                        if signal and current_time - self.last_trade_time > self.cooldown_period:
-                            # Đã sửa lỗi: Truyền current_volume và closed_volume
-                            self.open_position(signal, current_volume, closed_volume) 
-                            self.last_trade_time = current_time
+                if self.position_open:
+                    # Kiểm tra TP/SL
+                    self.check_tp_sl()
+                else:
+                    # Mở lệnh theo target_side đã xác định từ 24h change
+                    if self.target_side and current_time - self.last_trade_time > self.cooldown_period:
+                        self.open_position(self.target_side) 
+                        self.last_trade_time = current_time
                         
-                time.sleep(1)  # Sleep ngắn hơn cho khung 1m
+                time.sleep(5) 
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 30:
                     self.log(f"❌ Main loop error: {str(e)}", is_critical=False)
                     self.last_error_log_time = time.time()
-                time.sleep(5)
-
+                time.sleep(10)
 
     def stop(self):
         self._stop = True
@@ -722,7 +631,7 @@ class IndicatorBot:
             
             if roi >= self.tp:
                 self.close_position(f"✅ TP hit at {self.tp}% (ROI: {roi:.2f}%)")
-            elif self.sl is not None and self.sl > 0 and roi <= -self.sl: # Thêm điều kiện self.sl > 0
+            elif self.sl is not None and self.sl > 0 and roi <= -self.sl:
                 self.close_position(f"❌ SL hit at {self.sl}% (ROI: {roi:.2f}%)")
                 
         except Exception as e:
@@ -730,7 +639,8 @@ class IndicatorBot:
                 self.log(f"TP/SL check error: {str(e)}")
                 self.last_error_log_time = time.time()
 
-    def open_position(self, side, current_volume=0, closed_volume=0): # Thêm tham số volume
+    # BỎ THAM SỐ volume
+    def open_position(self, side):
         self.check_position_status()
         if self.position_open:
             self.log("⚠️ Position already open, skipping")
@@ -789,21 +699,17 @@ class IndicatorBot:
             self.qty = executed_qty if side == "BUY" else -executed_qty
             self.status = "open"
             self.position_open = True
-            self.position_attempt_count = 0
 
-            # Gửi thông báo VÀ IN LOG CHI TIẾT VOLUME
-            volume_ratio = current_volume / closed_volume if closed_volume else 0
+            # Gửi thông báo
             message = (f"✅ <b>POSITION OPENED {self.symbol}</b>\n"
-                       f"📌 Direction: {side}\n"
+                       f"📌 Strategy: Contrarian 24h ({self.change_24h:.2f}%)\n"
+                       f"➡️ Direction: {side}\n"
                        f"🏷️ Entry Price: {self.entry:.4f}\n"
                        f"📊 Quantity: {executed_qty}\n"
                        f"💵 Value: {executed_qty * self.entry:.2f} USDT\n"
                        f" Leverage: {self.lev}x\n"
-                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n"
-                       f"🔥 **Volume Ratio: {volume_ratio:.2f}x** "
-                       f"(Current: {current_volume:.2f} | Closed: {closed_volume:.2f})")
+                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%")
             
-            # Gửi Telegram (is_critical=True là mặc định)
             self.log(message, is_critical=True)
             
         except Exception as e:
@@ -811,19 +717,16 @@ class IndicatorBot:
             self.log(f"❌ Error entering position: {str(e)}")
 
     def close_position(self, reason=""):
-        # Lấy logic đóng lệnh từ file 42: Đóng vị thế với số lượng chính xác
+        # Giữ nguyên logic đóng lệnh
         try:
             cancel_all_orders(self.symbol)
             if abs(self.qty) > 0:
                 close_side = "SELL" if self.side == "BUY" else "BUY"
                 close_qty = abs(self.qty)
                 
-                # Làm tròn số lượng CHÍNH XÁC
                 step = get_step_size(self.symbol)
                 if step > 0:
-                    # Tính toán chính xác số bước
                     steps = close_qty / step
-                    # Làm tròn đến số nguyên gần nhất
                     close_qty = round(steps) * step
                 
                 close_qty = max(close_qty, 0)
@@ -832,8 +735,6 @@ class IndicatorBot:
                 res = place_order(self.symbol, close_side, close_qty)
                 if res:
                     price = float(res.get('avgPrice', 0))
-                    
-                    # Tính ROI cho thông báo đóng lệnh (dùng hàm đã có)
                     roi = self.calculate_roi() 
 
                     message = (f"⛔ <b>POSITION CLOSED {self.symbol}</b>\n"
@@ -841,23 +742,21 @@ class IndicatorBot:
                               f"🏷️ Exit Price: {price:.4f}\n"
                               f"📊 Quantity: {close_qty}\n"
                               f"💵 Value: {close_qty * price:.2f} USDT\n"
-                              f"🔥 ROI: {roi:.2f}%") # Thêm ROI vào thông báo
+                              f"🔥 ROI: {roi:.2f}%")
                     self.log(message)
                     
-                    # Cập nhật trạng thái NGAY LẬP TỨC (quan trọng)
                     self.status = "waiting"
                     self.side = ""
                     self.qty = 0
                     self.entry = 0
                     self.position_open = False
                     self.last_trade_time = time.time()
-                    self.last_close_time = time.time()
                 else:
                     self.log("❌ Error closing position")
         except Exception as e:
             self.log(f"❌ Error closing position: {str(e)}")
 
-# ========== BOT MANAGER (Giữ nguyên) ==========
+# ========== BOT MANAGER (Cập nhật logic tạo bot) ==========
 class BotManager:
     def __init__(self):
         self.ws_manager = WebSocketManager()
@@ -881,10 +780,11 @@ class BotManager:
             send_telegram(f"<b>SYSTEM</b>: {message}")
 
     def send_main_menu(self, chat_id):
-        welcome = "🤖 <b>BINANCE FUTURES TRADING BOT</b>\n\nChoose an option below:"
+        welcome = "🤖 <b>BINANCE FUTURES TRADING BOT (Contrarian 24h)</b>\n\nChoose an option below:"
         send_telegram(welcome, chat_id, create_menu_keyboard())
 
-    def add_bot(self, symbol, lev, percent, tp, sl, initial_weights=None):
+    # THÊM THAM SỐ change_24h
+    def add_bot(self, symbol, lev, percent, tp, sl, change_24h, initial_weights=None):
         if sl == 0:
             sl = None
         symbol = symbol.upper()
@@ -897,17 +797,15 @@ class BotManager:
             return False
             
         try:
-            # Kiểm tra symbol có tồn tại
             price = get_current_price(symbol)
             if price <= 0:
                 self.log(f"❌ Cannot get price for {symbol}")
                 return False
                 
-            # Tạo bot
-            # Không cần truyền initial_weights nữa
-            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager)
+            # Tạo bot (truyền change_24h)
+            bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager, change_24h)
             self.bots[symbol] = bot
-            self.log(f"✅ Bot added: {symbol} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
+            self.log(f"✅ Bot added: {symbol} | Change 24h: {change_24h:.2f}% | Target: {bot.target_side} | Lev: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
             return True
             
         except Exception as e:
@@ -919,7 +817,6 @@ class BotManager:
         bot = self.bots.get(symbol)
         if bot:
             bot.stop()
-            # Bot sẽ tự đóng vị thế trong hàm stop
             self.log(f"⛔ Bot stopped for {symbol}")
             del self.bots[symbol]
             return True
@@ -993,16 +890,9 @@ class BotManager:
         user_state = self.user_states.get(chat_id, {})
         current_step = user_state.get('step')
         
-        if current_step == 'waiting_symbol':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
-            else:
-                symbol = text.upper()
-                self.user_states[chat_id] = {'step': 'waiting_leverage', 'symbol': symbol}
-                send_telegram(f"Choose leverage for {symbol}:", chat_id, create_leverage_keyboard())
-                
-        elif current_step == 'waiting_leverage':
+        # BỎ BƯỚC CHỌN SYMBOL VÀ ĐI THẲNG TỚI CHỌN LEVERAGE
+        
+        if current_step == 'waiting_leverage':
             if text == '❌ Hủy bỏ':
                 self.user_states[chat_id] = {}
                 send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
@@ -1010,7 +900,7 @@ class BotManager:
                 leverage = int(text.replace('', '').replace('x', '').strip())
                 user_state['leverage'] = leverage
                 user_state['step'] = 'waiting_percent'
-                send_telegram(f"Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
+                send_telegram(f"Bước 2/4: Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
                 
         elif current_step == 'waiting_percent':
             if text == '❌ Hủy bỏ':
@@ -1022,7 +912,7 @@ class BotManager:
                     if 1 <= percent <= 100:
                         user_state['percent'] = percent
                         user_state['step'] = 'waiting_tp'
-                        send_telegram(f"Enter % Take Profit (e.g., 10):", chat_id, create_cancel_keyboard())
+                        send_telegram(f"Bước 3/4: Enter % Take Profit (e.g., 10):", chat_id, create_cancel_keyboard())
                     else:
                         send_telegram("⚠️ Please enter a % from 1-100", chat_id)
                 except Exception:
@@ -1038,7 +928,7 @@ class BotManager:
                     if tp > 0:
                         user_state['tp'] = tp
                         user_state['step'] = 'waiting_sl'
-                        send_telegram(f"Enter % Stop Loss (e.g., 5, 0 for no SL):", chat_id, create_cancel_keyboard())
+                        send_telegram(f"Bước 4/4: Enter % Stop Loss (e.g., 5, 0 for no SL):", chat_id, create_cancel_keyboard())
                     else:
                         send_telegram("⚠️ TP must be greater than 0", chat_id)
                 except Exception:
@@ -1052,17 +942,36 @@ class BotManager:
                 try:
                     sl = float(text)
                     if sl >= 0:
-                        symbol = user_state['symbol']
                         leverage = user_state['leverage']
                         percent = user_state['percent']
                         tp = user_state['tp']
-        
-                        # KHÔNG CẦN TRAINING NỮA
                         
-                        if self.add_bot(symbol, leverage, percent, tp, sl, initial_weights=None):
+                        # ========= LOGIC MỚI: TỰ ĐỘNG CHỌN SYMBOL VÀ XÁC ĐỊNH CHIỀU ==========
+                        send_telegram("🔍 Đang tìm kiếm đồng coin có biến động > 30% trong 24h...", chat_id)
+                        
+                        found_symbol = None
+                        volatility = 0.0
+                        for attempt in range(3):
+                            found_symbol, volatility = find_high_volatility_symbol(min_change_percent=30.0)
+                            if found_symbol:
+                                break
+                            time.sleep(5)
+                            
+                        if not found_symbol:
+                            send_telegram("❌ Không tìm thấy đồng coin nào có biến động > 30% sau 3 lần thử. Vui lòng thử lại sau.", chat_id, create_menu_keyboard())
+                            self.user_states[chat_id] = {}
+                            return
+                            
+                        symbol = found_symbol
+                        target_side = "BUY" if volatility < 0 else "SELL"
+                        # ====================================================================
+                        
+                        # Gọi hàm add_bot với tham số volatility
+                        if self.add_bot(symbol, leverage, percent, tp, sl, change_24h=volatility):
                             send_telegram(
-                                f"✅ <b>BOT ADDED SUCCESSFULLY</b>\n\n"
-                                f"📌 Pair: {symbol}\n"
+                                f"✅ <b>BOT ADDED SUCCESSFULLY (Contrarian 24h)</b>\n\n"
+                                f"📌 Pair: {symbol} | Volatility 24h: {volatility:.2f}%\n"
+                                f"➡️ Target Side: {target_side}\n"
                                 f" Leverage: {leverage}x\n"
                                 f"📊 % Balance: {percent}%\n"
                                 f"🎯 TP: {tp}%\n"
@@ -1087,12 +996,13 @@ class BotManager:
                 message = "🤖 <b>LIST OF RUNNING BOTS</b>\n\n"
                 for symbol, bot in self.bots.items():
                     status = "🟢 Open" if bot.status == "open" else "🟡 Waiting"
-                    message += f"🔹 {symbol} | {status} | {bot.side} | Lev: {bot.lev}x\n"
+                    message += f"🔹 {symbol} | {status} | Target: {bot.target_side} | Lev: {bot.lev}x\n"
                 send_telegram(message, chat_id)
                 
         elif text == "➕ Thêm Bot":
-            self.user_states[chat_id] = {'step': 'waiting_symbol'}
-            send_telegram("Choose a coin pair:", chat_id, create_symbols_keyboard())
+            # Chuyển thẳng đến bước chọn leverage
+            self.user_states[chat_id] = {'step': 'waiting_leverage'}
+            send_telegram("Bước 1/4: Choose leverage for the new bot:", chat_id, create_leverage_keyboard())
             
         elif text == "⛔ Dừng Bot":
             if not self.bots:
@@ -1152,31 +1062,20 @@ class BotManager:
 # ========== FUNCTIONS FOR INITIAL TRAINING (Bị xóa vì không dùng weights) ==========
 def perform_initial_training(manager, bot_configs):
     """ Hàm này bị giữ lại rỗng để tránh lỗi nếu có nơi nào gọi đến """
-    manager.log("⚠️ Initial training function is disabled (Volume logic in use).")
+    manager.log("⚠️ Initial training function is disabled (Contrarian 24h logic in use).")
     for config in bot_configs:
         if len(config) == 5:
-            config.append(None) # Đảm bảo config có 6 phần tử để tránh lỗi index
+            config.append(None) 
 
 # ========== MAIN FUNCTION ==========
 def main():
     manager = BotManager()
 
     if BOT_CONFIGS:
-        # Gọi hàm training rỗng để đảm bảo BOT_CONFIGS có 6 phần tử (dù không dùng weights)
         perform_initial_training(manager, BOT_CONFIGS) 
         
-        for config in BOT_CONFIGS:
-            if len(config) >= 5:
-                # Lấy 5 tham số chính
-                symbol, lev, percent, tp, sl = config[0], config[1], config[2], config[3], config[4]
-                
-                # initial_weights luôn là None
-                if manager.add_bot(symbol, lev, percent, tp, sl, initial_weights=None):
-                    manager.log(f"✅ Bot for {symbol} started successfully (Volume Logic)")
-                else:
-                    manager.log(f"⚠️ Bot for {symbol} failed to start")
-    else:
-        manager.log("⚠️ No bot configurations found! Please set BOT_CONFIGS environment variable.")
+        # Log: Không thể tạo bot từ BOT_CONFIGS vì cần tìm symbol động
+        manager.log("⚠️ Bot configurations from environment variables are ignored because the current strategy requires dynamic symbol selection (Contrarian 24h). Please use the Telegram menu to start bots.")
 
     try:
         balance = get_balance()
