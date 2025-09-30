@@ -46,7 +46,6 @@ API_SECRET = BINANCE_SECRET_KEY
 
 # ========== TELEGRAM FUNCTIONS ==========
 def send_telegram(message, chat_id=None, reply_markup=None):
-    """Sends a message via Telegram with detailed error handling."""
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("Telegram Bot Token is not configured.")
         return
@@ -75,7 +74,6 @@ def send_telegram(message, chat_id=None, reply_markup=None):
         logger.error(f"Telegram connection error: {str(e)}")
 
 def create_menu_keyboard():
-    """Creates a menu for Telegram."""
     return {
         "keyboard": [
             [{"text": "📊 Danh sách Bot"}],
@@ -87,7 +85,6 @@ def create_menu_keyboard():
     }
 
 def create_cancel_keyboard():
-    """Creates a cancel keyboard."""
     return {
         "keyboard": [[{"text": "❌ Hủy bỏ"}]],
         "resize_keyboard": True,
@@ -95,7 +92,6 @@ def create_cancel_keyboard():
     }
 
 def create_leverage_keyboard():
-    """Creates a keyboard for selecting leverage."""
     leverages = ["3", "8", "10", "20", "30", "50", "75", "100"]
     keyboard = []
     row = []
@@ -126,7 +122,6 @@ def sign(query):
 def binance_api_request(url, method='GET', params=None, headers=None):
     """
     General function for Binance API requests with DETAILED ERROR LOGGING.
-    Chức năng này được cải tiến để ghi lại lỗi chi tiết từ Binance API.
     """
     max_retries = 3
     for attempt in range(max_retries):
@@ -144,7 +139,6 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                 if response.status == 200:
                     return json.loads(response.read().decode())
                 else:
-                    # Ghi lỗi chi tiết từ Binance khi HTTP Status không phải 200
                     error_response = response.read().decode()
                     logger.error(f"API Error ({response.status}): {error_response}")
                     
@@ -154,7 +148,6 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                         time.sleep(1)
                     continue
         except urllib.error.HTTPError as e:
-            # Ghi lỗi chi tiết từ HTTP Error
             error_response = e.read().decode()
             logger.error(f"HTTP Error ({e.code}): {e.reason}. Detail: {error_response}")
             
@@ -181,13 +174,17 @@ def get_max_leverage(symbol):
         headers = {'X-MBX-APIKEY': API_KEY}
         
         data = binance_api_request(url, headers=headers)
-        if data and isinstance(data, list) and data:
+        if (data and isinstance(data, list) and len(data) > 0 and 
+            'brackets' in data[0] and len(data[0]['brackets']) > 0 and
+            'initialLeverage' in data[0]['brackets'][0]):
             return int(data[0]['brackets'][0]['initialLeverage'])
+        else:
+            logger.warning(f"Invalid leverage data structure for {symbol}")
     except Exception as e:
         logger.error(f"Error getting max leverage for {symbol}: {str(e)}")
-    return 20 
+    return 20
 
-def find_eligible_symbols(min_leverage, min_change_percent):
+def find_eligible_symbols(min_leverage, min_change_percent=30.0):
     """
     Tìm TẤT CẢ symbol có đòn bẩy tối đa >= min_leverage và biến động 24h (giá trị tuyệt đối) >= min_change_percent.
     """
@@ -217,10 +214,11 @@ def find_eligible_symbols(min_leverage, min_change_percent):
                         "change": price_change_percent,
                         "max_leverage": max_lev
                     })
-        except ValueError:
+        except ValueError as e:
+            logger.debug(f"Invalid price change percent for {symbol}: {price_change_percent_str}")
             continue
             
-    # Sắp xếp theo biến động giảm dần (tuyệt đối)
+    # Sắp xếp theo biến động giảm dần
     eligible_symbols.sort(key=lambda x: abs(x['change']), reverse=True)
     
     return eligible_symbols
@@ -246,7 +244,9 @@ def get_step_size(symbol):
                 for f in s['filters']:
                     if f['filterType'] == 'LOT_SIZE': 
                         return float(f['stepSize'])
-    except Exception as e: logger.error(f"Error getting step size: {str(e)}"); send_telegram(f"⚠️ <b>STEP SIZE ERROR:</b> {symbol} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error getting step size: {str(e)}")
+        send_telegram(f"⚠️ <b>STEP SIZE ERROR:</b> {symbol} - {str(e)}")
     return 0.001
 
 def set_leverage(symbol, lev):
@@ -259,7 +259,9 @@ def set_leverage(symbol, lev):
         headers = {'X-MBX-APIKEY': API_KEY}
         response = binance_api_request(url, method='POST', headers=headers)
         if response and 'leverage' in response: return True
-    except Exception as e: logger.error(f"Error setting leverage: {str(e)}"); send_telegram(f"⚠️ <b>LEVERAGE ERROR:</b> {symbol} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error setting leverage: {str(e)}")
+        send_telegram(f"⚠️ <b>LEVERAGE ERROR:</b> {symbol} - {str(e)}")
     return False
 
 def get_balance():
@@ -274,7 +276,9 @@ def get_balance():
         if not data: return 0
         for asset in data['assets']:
             if asset['asset'] == 'USDT': return float(asset['availableBalance'])
-    except Exception as e: logger.error(f"Error getting balance: {str(e)}"); send_telegram(f"⚠️ <b>BALANCE ERROR:</b> {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error getting balance: {str(e)}")
+        send_telegram(f"⚠️ <b>BALANCE ERROR:</b> {str(e)}")
     return 0
 
 def place_order(symbol, side, qty):
@@ -286,7 +290,9 @@ def place_order(symbol, side, qty):
         url = f"https://fapi.binance.com/fapi/v1/order?{query}&signature={sig}"
         headers = {'X-MBX-APIKEY': API_KEY}
         return binance_api_request(url, method='POST', headers=headers)
-    except Exception as e: logger.error(f"Error placing order: {str(e)}"); send_telegram(f"⚠️ <b>ORDER ERROR:</b> {symbol} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error placing order: {str(e)}")
+        send_telegram(f"⚠️ <b>ORDER ERROR:</b> {symbol} - {str(e)}")
     return None
 
 def cancel_all_orders(symbol):
@@ -299,7 +305,9 @@ def cancel_all_orders(symbol):
         headers = {'X-MBX-APIKEY': API_KEY}
         binance_api_request(url, method='DELETE', headers=headers)
         return True
-    except Exception as e: logger.error(f"Error canceling orders: {str(e)}"); send_telegram(f"⚠️ <b>CANCEL ORDER ERROR:</b> {symbol} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error canceling orders: {str(e)}")
+        send_telegram(f"⚠️ <b>CANCEL ORDER ERROR:</b> {symbol} - {str(e)}")
     return False
 
 def get_current_price(symbol):
@@ -307,7 +315,9 @@ def get_current_price(symbol):
         url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}"
         data = binance_api_request(url)
         if data and 'price' in data: return float(data['price'])
-    except Exception as e: logger.error(f"Error getting price: {str(e)}"); send_telegram(f"⚠️ <b>PRICE ERROR:</b> {symbol} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error getting price: {str(e)}")
+        send_telegram(f"⚠️ <b>PRICE ERROR:</b> {symbol} - {str(e)}")
     return 0
 
 def get_positions(symbol=None):
@@ -325,15 +335,16 @@ def get_positions(symbol=None):
             for pos in positions:
                 if pos['symbol'] == symbol.upper(): return [pos]
         return positions
-    except Exception as e: logger.error(f"Error getting positions: {str(e)}"); send_telegram(f"⚠️ <b>POSITIONS ERROR:</b> {symbol if symbol else ''} - {str(e)}")
+    except Exception as e: 
+        logger.error(f"Error getting positions: {str(e)}")
+        send_telegram(f"⚠️ <b>POSITIONS ERROR:</b> {symbol if symbol else ''} - {str(e)}")
     return []
 
-# Hàm giữ lại để tránh lỗi gọi hàm
 def update_weights_and_stats(*args):
     """Hàm này được giữ lại ở dạng tối giản để tránh lỗi gọi hàm."""
     return {}, {}
 
-# ========== WEBSOCKET MANAGER (Giữ nguyên) ==========
+# ========== WEBSOCKET MANAGER (ĐÃ CẢI THIỆN) ==========
 class WebSocketManager:
     def __init__(self):
         self.connections = {}
@@ -349,7 +360,6 @@ class WebSocketManager:
 
     def _create_connection(self, symbol, callback):
         if self._stop_event.is_set(): return
-        # Dùng aggTrade stream để có giá nhanh nhất
         stream = f"{symbol.lower()}@aggTrade"
         url = f"wss://fstream.binance.com/ws/{stream}"
 
@@ -358,18 +368,38 @@ class WebSocketManager:
                 data = json.loads(message)
                 if 'p' in data:
                     price = float(data['p'])
+                    # Thêm rate limiting để tránh xử lý quá nhiều message
+                    current_time = time.time()
+                    if hasattr(ws, 'last_processed') and current_time - ws.last_processed < 0.1:
+                        return
+                    ws.last_processed = current_time
                     self.executor.submit(callback, price)
-            except Exception as e: logger.error(f"WebSocket message processing error {symbol}: {str(e)}")
+            except Exception as e: 
+                logger.error(f"WebSocket message processing error {symbol}: {str(e)}")
 
         def on_error(ws, error):
             logger.error(f"WebSocket error {symbol}: {str(error)}")
-            if not self._stop_event.is_set(): time.sleep(5); self._reconnect(symbol, callback)
+            if not self._stop_event.is_set(): 
+                time.sleep(5)
+                # Thêm kiểm tra số lần reconnect
+                if hasattr(ws, 'reconnect_count'):
+                    ws.reconnect_count += 1
+                    if ws.reconnect_count > 5:
+                        logger.error(f"Max reconnection attempts reached for {symbol}")
+                        return
+                else:
+                    ws.reconnect_count = 1
+                self._reconnect(symbol, callback)
 
         def on_close(ws, close_status_code, close_msg):
             logger.info(f"WebSocket closed {symbol}: {close_status_code} - {close_msg}")
-            if not self._stop_event.is_set() and symbol in self.connections: time.sleep(5); self._reconnect(symbol, callback)
+            if not self._stop_event.is_set() and symbol in self.connections: 
+                time.sleep(5)
+                self._reconnect(symbol, callback)
 
-        def on_open(ws): logger.info(f"WebSocket connected for {symbol}")
+        def on_open(ws): 
+            logger.info(f"WebSocket connected for {symbol}")
+            ws.last_processed = 0
 
         ws = websocket.WebSocketApp(url, on_message=on_message, on_error=on_error, on_close=on_close, on_open=on_open)
         thread = threading.Thread(target=ws.run_forever, daemon=True)
@@ -387,34 +417,37 @@ class WebSocketManager:
         symbol = symbol.upper()
         with self._lock:
             if symbol in self.connections:
-                try: self.connections[symbol]['ws'].close()
-                except Exception as e: logger.error(f"Error closing WebSocket {symbol}: {str(e)}")
+                try: 
+                    self.connections[symbol]['ws'].close()
+                except Exception as e: 
+                    logger.error(f"Error closing WebSocket {symbol}: {str(e)}")
                 del self.connections[symbol]
                 logger.info(f"WebSocket removed for {symbol}")
 
     def stop(self):
         self._stop_event.set()
-        for symbol in list(self.connections.keys()): self.remove_symbol(symbol)
+        for symbol in list(self.connections.keys()): 
+            self.remove_symbol(symbol)
 
-# ========== MAIN BOT CLASS (Logic Dynamic Hunter) ==========
+# ========== MAIN BOT CLASS (Logic Dynamic Hunter - ĐÃ SỬA LỖI) ==========
 class IndicatorBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, change_24h, max_leverage, min_volatility):
-        self.initial_symbol = symbol.upper() # Symbol ban đầu được tạo
-        self.symbol = symbol.upper()        # Symbol hiện tại bot đang theo dõi
+        self.symbol = symbol.upper()
         self.lev = lev
         self.percent = percent
         self.tp = tp
-        self.sl = sl if sl is not None and sl > 0 else None
+        self.sl = sl
         self.ws_manager = ws_manager
         
         self.initial_lev = lev
+        self.initial_symbol = symbol.upper()
         self.current_max_leverage = max_leverage
-        self.min_volatility = min_volatility # NGƯỠNG BIẾN ĐỘNG TỐI THIỂU
+        self.min_volatility = min_volatility
         
         self.target_side = self._determine_target_side(change_24h) 
         self.current_change_24h = change_24h
 
-        # Trạng thái vị thế
+        # Kiểm tra vị thế đang mở
         self.check_position_status()
         self.status = "waiting"
         self.side = ""
@@ -428,9 +461,11 @@ class IndicatorBot:
         self.position_check_interval = 30
         self.last_position_check = 0
         self.last_error_log_time = 0
-        self.cooldown_period = 60 # 60 giây cooldown giữa các lần mở lệnh
-
-        self.log(f"🟢 Bot started | Initial: {self.initial_symbol} | Current: {self.symbol} | Target: {self.target_side} | Lev: {self.lev}x | Min Vol: {self.min_volatility}%")
+        self.cooldown_period = 60
+        self.last_symbol_search = 0
+        self.symbol_search_interval = 30
+        
+        self.log(f"🟢 Bot started | Current: {self.symbol} | Target: {self.target_side} | Lev: {self.lev}x | Min Vol: {self.min_volatility}%")
 
         # Bắt đầu WebSocket cho symbol hiện tại
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
@@ -439,36 +474,48 @@ class IndicatorBot:
 
     def _determine_target_side(self, change_24h):
         """Xác định chiều vào lệnh ngược xu hướng 24h (>= Min Volatility)."""
-        # Nếu giảm mạnh -> BUY (LONG), nếu tăng mạnh -> SELL (SHORT)
         if change_24h <= -self.min_volatility:
             return "BUY" 
         elif change_24h >= self.min_volatility:
             return "SELL" 
-        return None 
+        else:
+            # Nếu biến động không đủ, vẫn trả về hướng dựa trên trend
+            return "BUY" if change_24h < 0 else "SELL"
 
     def calculate_roi(self):
-        if not self.position_open or self.entry == 0: return 0.0
-        current_price = self.prices[-1] if self.prices else self.entry
-        if self.side == "BUY": roi = ((current_price - self.entry) / self.entry) * self.lev * 100
-        else: roi = ((self.entry - current_price) / self.entry) * self.lev * 100
-        return roi
+        if not self.position_open or self.entry == 0 or self.entry is None: 
+            return 0.0
+        try:
+            current_price = self.prices[-1] if self.prices else self.entry
+            if self.entry == 0:
+                return 0.0
+            if self.side == "BUY": 
+                roi = ((current_price - self.entry) / self.entry) * self.lev * 100
+            else: 
+                roi = ((self.entry - current_price) / self.entry) * self.lev * 100
+            return roi
+        except Exception as e:
+            logger.error(f"ROI calculation error: {str(e)}")
+            return 0.0
 
     def log(self, message, is_critical=True):
-        # Log sử dụng Initial symbol và Current symbol
         logger.info(f"[{self.initial_symbol}/{self.symbol}] {message}") 
-        if is_critical: send_telegram(f"<b>{self.initial_symbol} ({self.symbol})</b>: {message}")
+        if is_critical: 
+            send_telegram(f"<b>{self.initial_symbol} ({self.symbol})</b>: {message}")
 
     def _handle_price_update(self, price):
         if self._stop: return
         if not self.prices or price != self.prices[-1]:
             self.prices.append(price)
-            if len(self.prices) > 100: self.prices = self.prices[-100:]
-            if self.position_open: self.check_tp_sl()
+            if len(self.prices) > 100: 
+                self.prices = self.prices[-100:]
+            if self.position_open: 
+                self.check_tp_sl()
 
     def _update_symbol_and_stream(self, new_symbol, new_change_24h, new_max_leverage):
         """Cập nhật symbol và WebSocket stream khi tìm thấy symbol mới."""
         
-        self.log(f"🔄 Switching monitoring from {self.symbol} to {new_symbol} (Change: {new_change_24h:.2f}%)")
+        self.log(f"🔄 Switching monitoring from {self.symbol} to {new_symbol} (Target: {new_change_24h:.2f}%)")
         
         # 1. Dừng stream cũ
         self.ws_manager.remove_symbol(self.symbol) 
@@ -485,7 +532,7 @@ class IndicatorBot:
 
     def _run(self):
         """Main loop: Kiểm tra vị thế. Nếu chưa có, tìm symbol mới và vào lệnh trên symbol đó."""
-        self.log("🔍 Starting main trade loop (Dynamic Contrarian Hunter).")
+        self.log("🔍 Starting main trade loop (Dynamic Hunter).")
         
         while not self._stop:
             try:
@@ -500,10 +547,12 @@ class IndicatorBot:
                     self.check_tp_sl()
                 else:
                     # 2. Logic: Nếu bot chưa có lệnh, tìm symbol mới và vào lệnh
-                    if current_time - self.last_trade_time > self.cooldown_period:
-                        self.log("🔄 Position closed. Starting search for next high-volatility symbol...")
+                    if (current_time - self.last_trade_time > self.cooldown_period and 
+                        current_time - self.last_symbol_search > self.symbol_search_interval):
                         
-                        # Tự động tìm symbol tốt nhất (ngưỡng volatility đã được cài đặt ban đầu)
+                        self.log("🔄 Position closed. Starting search from scratch...")
+                        
+                        # Tự động tìm symbol tốt nhất
                         eligible_list = find_eligible_symbols(
                             min_leverage=self.initial_lev, 
                             min_change_percent=self.min_volatility
@@ -517,7 +566,7 @@ class IndicatorBot:
                             new_target_side = self._determine_target_side(change_24h)
                             
                             if new_target_side:
-                                # Chuyển đổi symbol nếu symbol tốt nhất khác symbol bot đang theo dõi
+                                # Chuyển đổi symbol chỉ khi symbol tốt nhất khác symbol bot đang theo dõi
                                 if symbol != self.symbol:
                                     self._update_symbol_and_stream(symbol, change_24h, max_leverage)
                                 else:
@@ -525,14 +574,17 @@ class IndicatorBot:
                                     self.current_change_24h = change_24h
                                     self.current_max_leverage = max_leverage
                                 
-                                # Mở lệnh trên symbol hiện tại (đã được cập nhật nếu cần)
+                                # Mở lệnh trên symbol hiện tại
                                 self.log(f"🚀 Attempting to open {new_target_side} position on {self.symbol}...")
-                                self.open_position(new_target_side) 
+                                self.open_position(new_target_side, change_24h=self.current_change_24h)
                                 self.last_trade_time = current_time
                             else:
                                 self.log(f"⚠️ Found {symbol} but 24h change ({change_24h:.2f}%) does not meet the {self.min_volatility}% threshold for entry.")
                         else:
-                            self.log("⏳ No suitable high volatility symbol found. Waiting...")
+                            self.log("⏳ No suitable high volatility symbol found. Waiting 60 seconds...")
+                            time.sleep(60)
+                        
+                        self.last_symbol_search = current_time
                         
                 time.sleep(5) 
                 
@@ -545,46 +597,73 @@ class IndicatorBot:
     def stop(self):
         self._stop = True
         self.ws_manager.remove_symbol(self.symbol)
-        try: cancel_all_orders(self.symbol)
-        except Exception as e: self.log(f"Order cancellation error: {str(e)}")
+        try: 
+            cancel_all_orders(self.symbol)
+        except Exception as e: 
+            self.log(f"Order cancellation error: {str(e)}")
         self.log(f"🔴 Bot stopped for {self.initial_symbol}") 
 
     def check_position_status(self):
         try:
             positions = get_positions(self.symbol)
             if not positions or len(positions) == 0:
-                self.position_open = False; self.status = "waiting"; self.side = ""; self.qty = 0; self.entry = 0; return
+                self.position_open = False
+                self.status = "waiting"
+                self.side = ""
+                self.qty = 0
+                self.entry = 0
+                return
                 
             for pos in positions:
                 if pos['symbol'] == self.symbol:
                     position_amt = float(pos.get('positionAmt', 0))
                     if abs(position_amt) > 0:
-                        self.position_open = True; self.status = "open"
+                        self.position_open = True
+                        self.status = "open"
                         self.side = "BUY" if position_amt > 0 else "SELL"
                         self.qty = position_amt
                         self.entry = float(pos.get('entryPrice', 0))
                         return
                         
-            self.position_open = False; self.status = "waiting"; self.side = ""; self.qty = 0; self.entry = 0
+            self.position_open = False
+            self.status = "waiting"
+            self.side = ""
+            self.qty = 0
+            self.entry = 0
         except Exception as e:
-            if time.time() - self.last_error_log_time > 30: self.log(f"Position check error: {str(e)}"); self.last_error_log_time = time.time()
+            if time.time() - self.last_error_log_time > 30: 
+                self.log(f"Position check error: {str(e)}")
+                self.last_error_log_time = time.time()
 
     def check_tp_sl(self):
-        if not self.position_open or not self.entry or not self.qty: return
+        if not self.position_open or not self.entry or not self.qty: 
+            return
         try:
             current_price = self.prices[-1] if self.prices else get_current_price(self.symbol)
-            if current_price <= 0: return
-            if self.side == "BUY": profit = (current_price - self.entry) * abs(self.qty)
-            else: profit = (self.entry - current_price) * abs(self.qty)
+            if current_price <= 0: 
+                return
+                
+            if self.side == "BUY": 
+                profit = (current_price - self.entry) * abs(self.qty)
+            else: 
+                profit = (self.entry - current_price) * abs(self.qty)
+                
             invested = self.entry * abs(self.qty) / self.lev
-            if invested <= 0: return
+            if invested <= 0: 
+                return
+                
             roi = (profit / invested) * 100
-            if roi >= self.tp: self.close_position(f"✅ TP hit at {self.tp}% (ROI: {roi:.2f}%)")
-            elif self.sl is not None and roi <= -self.sl: self.close_position(f"❌ SL hit at {self.sl}% (ROI: {roi:.2f}%)")
+            if roi >= self.tp: 
+                self.close_position(f"✅ TP hit at {self.tp}% (ROI: {roi:.2f}%)")
+            elif self.sl is not None and self.sl > 0 and roi <= -self.sl: 
+                self.close_position(f"❌ SL hit at {self.sl}% (ROI: {roi:.2f}%)")
+                
         except Exception as e:
-            if time.time() - self.last_error_log_time > 30: self.log(f"TP/SL check error: {str(e)}"); self.last_error_log_time = time.time()
+            if time.time() - self.last_error_log_time > 30: 
+                self.log(f"TP/SL check error: {str(e)}")
+                self.last_error_log_time = time.time()
 
-    def open_position(self, side):
+    def open_position(self, side, current_volume=0, closed_volume=0):
         self.check_position_status()
         if self.position_open:
             self.log("⚠️ Position already open, skipping")
@@ -592,48 +671,60 @@ class IndicatorBot:
             
         try:
             cancel_all_orders(self.symbol)
-            if not set_leverage(self.symbol, self.lev): self.log(f"❌ Could not set leverage to {self.lev}"); return
+            if not set_leverage(self.symbol, self.lev): 
+                self.log(f"❌ Could not set leverage to {self.lev}")
+                return
                 
             balance = get_balance()
-            if balance <= 0: self.log("❌ Insufficient USDT balance"); return
+            if balance <= 0: 
+                self.log("❌ Insufficient USDT balance")
+                return
                 
             # 1. XÁC ĐỊNH SỐ VỐN KÝ QUỸ (MARGIN)
             usdt_amount = balance * (min(max(self.percent, 1), 100) / 100)
             
             price = get_current_price(self.symbol)
-            if price <= 0: self.log("❌ Error getting price"); return
+            if price <= 0: 
+                self.log("❌ Error getting price")
+                return
                 
             step = get_step_size(self.symbol)
-            if step <= 0: step = 0.001
-            
-            # === LOGIC TÍNH TOÁN VÀ LÀM TRÒN TỪ FILE 45 ĐÃ XÁC NHẬN LÀM VIỆC VỚI SỐ DƯ NHỎ ===
-            
-            # Tính toán số lượng thô
-            qty = (usdt_amount * self.lev) / price
-            
-            # Làm tròn xuống theo step (Sử dụng math.floor như file 45)
-            if step > 0:
-                qty = math.floor(qty / step) * step
+            if step <= 0: 
+                step = 0.001
                 
-            qty = max(qty, step) # Đảm bảo không nhỏ hơn step size
+            # 2. TÍNH TOÁN GIÁ TRỊ DANH NGHĨA (NOTIONAL VALUE)
+            notional_value = usdt_amount * self.lev
+
+            # 3. TÍNH TOÁN SỐ LƯỢNG THÔ
+            qty_raw = notional_value / price
+            
+            # 4. LÀM TRÒN CHÍNH XÁC THEO LOT_SIZE (STEP SIZE)
+            steps = qty_raw / step
+            qty = round(steps) * step
+            qty = max(qty, step)
             qty = round(qty, 8)
             
-            # 5. KIỂM TRA MIN NOTIONAL (Ngưỡng an toàn)
-            MIN_NOTIONAL_SAFE = 5.0 
+            # 5. KIỂM TRA MIN NOTIONAL
+            MIN_NOTIONAL_SAFE = 5.0
 
             if qty * price < MIN_NOTIONAL_SAFE:
-                 # Nếu sau khi làm tròn, giá trị vẫn quá nhỏ (như 2.36 USDT)
                  self.log(f"⚠️ Notional Value ({qty * price:.2f} USDT) too low (Min > {MIN_NOTIONAL_SAFE} USDT). Skipping trade.", is_critical=True)
                  return
             
-            if qty < step: self.log(f"⚠️ Quantity too small: {qty} < {step}"); return
+            if qty < step: 
+                self.log(f"⚠️ Quantity too small: {qty} < {step}")
+                return
                 
             # 6. ĐẶT LỆNH
             res = place_order(self.symbol, side, qty)
-            if not res: self.log("❌ Error placing order"); return
+            if not res: 
+                self.log("❌ Error placing order")
+                return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty < step: self.log(f"❌ Order not filled: {executed_qty}"); return
+            if executed_qty < step: 
+                self.log(f"❌ Order not filled: {executed_qty}")
+                return
 
             # 7. CẬP NHẬT TRẠNG THÁI
             self.entry = float(res.get('avgPrice', price))
@@ -642,13 +733,20 @@ class IndicatorBot:
             self.status = "open"
             self.position_open = True
 
+            # Xử lý volume ratio an toàn
+            try:
+                volume_ratio = current_volume / closed_volume if closed_volume and closed_volume > 0 else 0
+            except (ZeroDivisionError, TypeError):
+                volume_ratio = 0
+
             message = (f"✅ <b>POSITION OPENED {self.symbol}</b>\n"
                        f"📌 Direction: {side}\n"
                        f"🏷️ Entry Price: {self.entry:.4f}\n"
                        f"📊 Quantity: {executed_qty}\n"
                        f"💵 Value (Notional): {executed_qty * self.entry:.2f} USDT\n"
                        f" Leverage: {self.lev}x\n"
-                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl if self.sl is not None else 'N/A'}%")
+                       f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%\n"
+                       f"🔥 Volume Ratio: {volume_ratio:.2f}x")
             
             self.log(message, is_critical=True)
             
@@ -665,35 +763,17 @@ class IndicatorBot:
                 step = get_step_size(self.symbol)
                 
                 if step > 0: 
-                    # LÀM TRÒN CHÍNH XÁC KHI ĐÓNG LỆNH
                     steps = close_qty / step
                     close_qty = round(steps) * step
                 
-                close_qty = max(close_qty, 0); close_qty = round(close_qty, 8)
+                close_qty = max(close_qty, 0)
+                close_qty = round(close_qty, 8)
                 
                 res = place_order(self.symbol, close_side, close_qty)
-                
-                # === LOGIC XỬ LÝ GIÁ ĐÓNG LỆNH (FIX LỖI 0.0000 VÀ ROI LỚN) ===
-                price = 0
-                if res and res.get('status') == 'FILLED':
-                    # Lấy giá từ phản hồi lệnh nếu lệnh đã khớp
+                if res:
                     price = float(res.get('avgPrice', 0))
-                
-                # Nếu không nhận được giá hợp lệ từ lệnh, lấy giá hiện tại làm fallback (QUAN TRỌNG)
-                if price <= 0:
-                    fallback_price = get_current_price(self.symbol)
-                    if fallback_price > 0:
-                        price = fallback_price
-                        self.log(f"⚠️ Warning: Using fallback price {price:.4f} for ROI calculation.", is_critical=False)
-                # ==========================================================
-                
-                if price > 0:
-                    # Tạm thời cập nhật giá đóng lệnh để tính ROI chính xác
-                    original_prices = list(self.prices) 
-                    self.prices.append(price)
                     roi = self.calculate_roi() 
-                    self.prices = original_prices # Đặt lại giá
-                    
+
                     message = (f"⛔ <b>POSITION CLOSED {self.symbol}</b>\n"
                               f"📌 Reason: {reason}\n"
                               f"🏷️ Exit Price: {price:.4f}\n"
@@ -702,21 +782,18 @@ class IndicatorBot:
                               f"🔥 ROI: {roi:.2f}%")
                     self.log(message)
                     
-                    # KIỂM TRA LẠI VỊ THẾ SAU KHI ĐÓNG (QUAN TRỌNG)
-                    time.sleep(1) 
-                    self.check_position_status() 
-
-                    if not self.position_open:
-                        # Chỉ reset trạng thái nếu vị thế đã đóng thành công trên sàn
-                        self.status = "waiting"; self.side = ""; self.qty = 0; self.entry = 0; self.position_open = False
-                        self.last_trade_time = time.time()
-                    else:
-                        self.log("❌ Close order executed, but position is still open. Check manually!", is_critical=True)
+                    self.status = "waiting"
+                    self.side = ""
+                    self.qty = 0
+                    self.entry = 0
+                    self.position_open = False
+                    self.last_trade_time = time.time()
                 else: 
-                    self.log("❌ Error closing position: Could not determine exit price (API issue or Symbol closed).")
-        except Exception as e: self.log(f"❌ Error closing position: {str(e)}")
+                    self.log("❌ Error closing position")
+        except Exception as e: 
+            self.log(f"❌ Error closing position: {str(e)}")
 
-# ========== BOT MANAGER (Logic tạo hàng loạt bot) ==========
+# ========== BOT MANAGER (ĐÃ THÊM RATE LIMITING) ==========
 class BotManager:
     def __init__(self):
         self.ws_manager = WebSocketManager()
@@ -725,43 +802,55 @@ class BotManager:
         self.start_time = time.time()
         self.user_states = {}
         self.admin_chat_id = TELEGRAM_CHAT_ID
+        self.last_api_call = 0
+        self.min_api_interval = 0.2  # 200ms giữa các lần gọi API
+        
         self.log("🟢 BOT SYSTEM STARTED")
         self.status_thread = threading.Thread(target=self._status_monitor, daemon=True)
         self.status_thread.start()
         self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
         self.telegram_thread.start()
-        if self.admin_chat_id: self.send_main_menu(self.admin_chat_id)
+        if self.admin_chat_id: 
+            self.send_main_menu(self.admin_chat_id)
+
+    def rate_limited_api_call(self):
+        """Rate limiting cho API calls để tránh bị ban"""
+        current_time = time.time()
+        elapsed = current_time - self.last_api_call
+        if elapsed < self.min_api_interval:
+            time.sleep(self.min_api_interval - elapsed)
+        self.last_api_call = time.time()
 
     def log(self, message, is_critical=True):
         logger.info(f"[SYSTEM] {message}") 
-        if is_critical: send_telegram(f"<b>SYSTEM</b>: {message}")
+        if is_critical: 
+            send_telegram(f"<b>SYSTEM</b>: {message}")
 
     def send_main_menu(self, chat_id):
         welcome = "🤖 <b>BINANCE FUTURES TRADING BOT (Dynamic Contrarian 24h)</b>\n\nChoose an option below:"
         send_telegram(welcome, chat_id, create_menu_keyboard())
 
     def add_bot(self, symbol, lev, percent, tp, sl, change_24h, max_leverage, min_volatility):
-        if sl == 0: sl = None
-        symbol_id = f"BOT_{symbol}_{lev}x" # Dùng symbol ban đầu để làm ID 
+        if sl == 0: 
+            sl = None
+        symbol = symbol.upper()
         
-        if symbol_id in self.bots:
-            self.log(f"⚠️ Bot already exists for {symbol_id}")
-            return False
+        bot_id = f"BOT_{len(self.bots) + 1}"
             
         if not API_KEY or not API_SECRET:
             self.log("❌ API Key and Secret Key not configured!")
             return False
             
         try:
+            self.rate_limited_api_call()
             price = get_current_price(symbol)
             if price <= 0:
                 self.log(f"❌ Cannot get price for {symbol}")
                 return False
                 
-            # Tạo bot với logic Dynamic Hunter
             bot = IndicatorBot(symbol, lev, percent, tp, sl, self.ws_manager, change_24h, max_leverage, min_volatility)
-            self.bots[symbol_id] = bot
-            self.log(f"✅ Bot added: {symbol_id} | Pair: {symbol} | Vol: {min_volatility}% | Lev: {lev}x (Max {max_leverage}x) | %: {percent} | TP/SL: {tp}%/{sl}%")
+            self.bots[bot_id] = bot
+            self.log(f"✅ Bot added: {bot_id} | Pair: {symbol} | Vol: {min_volatility}% | Lev: {lev}x (Max {max_leverage}x) | %: {percent} | TP/SL: {tp}%/{sl}%")
             return True
             
         except Exception as e:
@@ -779,7 +868,8 @@ class BotManager:
 
     def stop_all(self):
         self.log("⛔ Stopping all bots...")
-        for bot_id in list(self.bots.keys()): self.stop_bot(bot_id)
+        for bot_id in list(self.bots.keys()): 
+            self.stop_bot(bot_id)
         self.ws_manager.stop()
         self.running = False
         self.log("🔴 System stopped")
@@ -788,8 +878,12 @@ class BotManager:
         while self.running:
             try:
                 uptime = time.time() - self.start_time
-                hours, rem = divmod(uptime, 3600); minutes, seconds = divmod(rem, 60); uptime_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+                hours, rem = divmod(uptime, 3600)
+                minutes, seconds = divmod(rem, 60)
+                uptime_str = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
                 active_bots_count = len(self.bots)
+                
+                self.rate_limited_api_call()
                 balance = get_balance()
                 
                 status_msg = (f"📊 <b>SYSTEM STATUS</b>\n"
@@ -798,14 +892,18 @@ class BotManager:
                              f"💰 Available Balance: {balance:.2f} USDT")
                 send_telegram(status_msg)
                 
-            except Exception as e: logger.error(f"Status report error: {str(e)}")
+            except Exception as e: 
+                logger.error(f"Status report error: {str(e)}")
             time.sleep(6 * 3600)
 
     def _telegram_listener(self):
         last_update_id = 0
         while self.running:
             try:
-                if not TELEGRAM_BOT_TOKEN: time.sleep(60); continue
+                if not TELEGRAM_BOT_TOKEN: 
+                    time.sleep(60)
+                    continue
+                    
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={last_update_id+1}&timeout=30"
                 response = requests.get(url, timeout=35)
                 if response.status_code == 200:
@@ -817,33 +915,38 @@ class BotManager:
                             chat_id = str(message.get('chat', {}).get('id'))
                             text = message.get('text', '').strip()
                             
-                            if chat_id != self.admin_chat_id: continue
+                            if chat_id != self.admin_chat_id: 
+                                continue
                             if update_id > last_update_id:
                                 last_update_id = update_id
                                 self._handle_telegram_message(chat_id, text)
-                elif response.status_code == 409: logger.error("Conflict error: Only one bot instance can listen to Telegram"); time.sleep(60)
-                else: time.sleep(10)
-            except Exception as e: logger.error(f"Telegram listener error: {str(e)}"); time.sleep(10)
+                elif response.status_code == 409: 
+                    logger.error("Conflict error: Only one bot instance can listen to Telegram")
+                    time.sleep(60)
+                else: 
+                    time.sleep(10)
+            except Exception as e: 
+                logger.error(f"Telegram listener error: {str(e)}")
+                time.sleep(10)
 
     def _handle_telegram_message(self, chat_id, text):
         user_state = self.user_states.get(chat_id, {})
         current_step = user_state.get('step')
         
-        # BƯỚC 1/5: Leverage
         if current_step == 'waiting_leverage':
-            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            if text == '❌ Hủy bỏ': 
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             elif 'x' in text:
-                try:
-                    leverage = int(text.replace('', '').replace('x', '').strip())
-                    if leverage < 1: raise ValueError
-                    user_state['leverage'] = leverage
-                    user_state['step'] = 'waiting_percent'
-                    send_telegram(f"Bước 2/5: Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
-                except: send_telegram("⚠️ Invalid leverage value, please choose from keyboard or enter a number > 0", chat_id, create_leverage_keyboard())
+                leverage = int(text.replace('', '').replace('x', '').strip())
+                user_state['leverage'] = leverage
+                user_state['step'] = 'waiting_percent'
+                send_telegram(f"Bước 2/5: Enter % of balance to use (1-100):", chat_id, create_cancel_keyboard())
                 
-        # BƯỚC 2/5: Percent
         elif current_step == 'waiting_percent':
-            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            if text == '❌ Hủy bỏ': 
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             else:
                 try:
                     percent = float(text)
@@ -851,12 +954,15 @@ class BotManager:
                         user_state['percent'] = percent
                         user_state['step'] = 'waiting_tp'
                         send_telegram(f"Bước 3/5: Enter % Take Profit (e.g., 10):", chat_id, create_cancel_keyboard())
-                    else: send_telegram("⚠️ Please enter a % from 1-100", chat_id)
-                except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
+                    else: 
+                        send_telegram("⚠️ Please enter a % from 1-100", chat_id)
+                except Exception: 
+                    send_telegram("⚠️ Invalid value, please enter a number", chat_id)
                     
-        # BƯỚC 3/5: Take Profit
         elif current_step == 'waiting_tp':
-            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            if text == '❌ Hủy bỏ': 
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             else:
                 try:
                     tp = float(text)
@@ -864,25 +970,31 @@ class BotManager:
                         user_state['tp'] = tp
                         user_state['step'] = 'waiting_sl'
                         send_telegram(f"Bước 4/5: Enter % Stop Loss (e.g., 5, 0 for no SL):", chat_id, create_cancel_keyboard())
-                    else: send_telegram("⚠️ TP must be greater than 0", chat_id)
-                except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
+                    else: 
+                        send_telegram("⚠️ TP must be greater than 0", chat_id)
+                except Exception: 
+                    send_telegram("⚠️ Invalid value, please enter a number", chat_id)
                     
-        # BƯỚC 4/5: Stop Loss
         elif current_step == 'waiting_sl':
-            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            if text == '❌ Hủy bỏ': 
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             else:
                 try:
                     sl = float(text)
                     if sl >= 0:
                         user_state['sl'] = sl
-                        user_state['step'] = 'waiting_min_volatility' # BƯỚC MỚI
-                        send_telegram("Bước 5/5: Enter Min Volatility % for 24h change (e.g., 30):", chat_id, create_cancel_keyboard())
-                    else: send_telegram("⚠️ SL must be greater than or equal to 0", chat_id)
-                except Exception: send_telegram("⚠️ Invalid value, please enter a number", chat_id)
+                        user_state['step'] = 'waiting_min_volatility'
+                        send_telegram("Bước 5/5: Enter Min Volatility % (e.g., 30):", chat_id, create_cancel_keyboard())
+                    else: 
+                        send_telegram("⚠️ SL must be greater than or equal to 0", chat_id)
+                except Exception: 
+                    send_telegram("⚠️ Invalid value, please enter a number", chat_id)
 
-        # BƯỚC 5/5: Min Volatility -> Tạo Bot Hàng Loạt
         elif current_step == 'waiting_min_volatility':
-            if text == '❌ Hủy bỏ': self.user_states[chat_id] = {}; send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
+            if text == '❌ Hủy bỏ': 
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Bot addition cancelled", chat_id, create_menu_keyboard())
             else:
                 try:
                     min_volatility = float(text)
@@ -914,22 +1026,23 @@ class BotManager:
                         
                         send_telegram(
                             f"✅ <b>TẠO HÀNG LOẠT BOT HOÀN TẤT</b>\n\n"
-                            f"Đã tạo thành công **{success_count}** bot (mỗi bot là một thợ săn độc lập).\n"
+                            f"Đã tạo thành công **{success_count}** bot. Mỗi bot là một thợ săn độc lập.\n"
                             f"Ngưỡng Volatility: **{min_volatility}%**",
                             chat_id,
                             create_menu_keyboard()
                         )
                         self.user_states[chat_id] = {}
-                    else: send_telegram("⚠️ Min Volatility must be greater than 0", chat_id)
+                    else: 
+                        send_telegram("⚠️ Min Volatility must be greater than 0", chat_id)
                 except Exception as e:
                     self.log(f"Mass creation error: {str(e)}", is_critical=True)
                     send_telegram("⚠️ Invalid value or API error during mass creation.", chat_id, create_menu_keyboard())
                     self.user_states[chat_id] = {}
 
                     
-        # HANDLERS KHÁC (Giữ nguyên)
         elif text == "📊 Danh sách Bot":
-            if not self.bots: send_telegram("🤖 No bots are currently running", chat_id)
+            if not self.bots: 
+                send_telegram("🤖 No bots are currently running", chat_id)
             else:
                 message = "🤖 <b>LIST OF RUNNING BOTS</b>\n\n"
                 for bot_id, bot in self.bots.items():
@@ -939,62 +1052,92 @@ class BotManager:
                 
         elif text == "➕ Thêm Bot":
             self.user_states[chat_id] = {'step': 'waiting_leverage'}
-            send_telegram("Bước 1/5: Choose leverage for the new bots:", chat_id, create_leverage_keyboard())
+            send_telegram("Bước 1/5: Choose leverage for the new bot:", chat_id, create_leverage_keyboard())
             
         elif text == "⛔ Dừng Bot":
-            if not self.bots: send_telegram("🤖 No bots are currently running", chat_id)
+            if not self.bots: 
+                send_telegram("🤖 No bots are currently running", chat_id)
             else:
                 message = "⛔ <b>CHOOSE BOT TO STOP</b>\n\n"
-                keyboard = []; row = []
+                keyboard = []
+                row = []
                 for bot_id, bot in self.bots.items():
-                    message += f"🔹 {bot_id} ({bot.initial_symbol})\n"; row.append({"text": f"⛔ {bot_id}"})
-                    if len(row) == 2: keyboard.append(row); row = []
-                if row: keyboard.append(row)
+                    message += f"🔹 {bot_id} ({bot.initial_symbol})\n"
+                    row.append({"text": f"⛔ {bot_id}"})
+                    if len(row) == 2: 
+                        keyboard.append(row)
+                        row = []
+                if row: 
+                    keyboard.append(row)
                 keyboard.append([{"text": "❌ Hủy bỏ"}])
                 send_telegram(message, chat_id, {"keyboard": keyboard, "resize_keyboard": True, "one_time_keyboard": True})
                 
         elif text.startswith("⛔ BOT_"):
             bot_id = text.replace("⛔ ", "").strip().upper()
-            if bot_id in self.bots: self.stop_bot(bot_id); send_telegram(f"⛔ Stop command sent for bot {bot_id}", chat_id, create_menu_keyboard())
-            else: send_telegram(f"⚠️ Bot not found {bot_id}", chat_id, create_menu_keyboard())
+            if bot_id in self.bots: 
+                self.stop_bot(bot_id)
+                send_telegram(f"⛔ Stop command sent for bot {bot_id}", chat_id, create_menu_keyboard())
+            else: 
+                send_telegram(f"⚠️ Bot not found {bot_id}", chat_id, create_menu_keyboard())
                 
         elif text == "💰 Số dư tài khoản":
-            try: balance = get_balance(); send_telegram(f"💰 <b>AVAILABLE BALANCE</b>: {balance:.2f} USDT", chat_id)
-            except Exception as e: send_telegram(f"⚠️ Error getting balance: {str(e)}", chat_id)
+            try: 
+                self.rate_limited_api_call()
+                balance = get_balance()
+                send_telegram(f"💰 <b>AVAILABLE BALANCE</b>: {balance:.2f} USDT", chat_id)
+            except Exception as e: 
+                send_telegram(f"⚠️ Error getting balance: {str(e)}", chat_id)
                 
         elif text == "📈 Vị thế đang mở":
             try:
+                self.rate_limited_api_call()
                 positions = get_positions()
-                if not positions: send_telegram("📭 No open positions", chat_id); return
+                if not positions: 
+                    send_telegram("📭 No open positions", chat_id)
+                    return
                 message = "📈 <b>OPEN POSITIONS</b>\n\n"
                 for pos in positions:
                     position_amt = float(pos.get('positionAmt', 0))
                     if position_amt != 0:
-                        symbol = pos.get('symbol', 'UNKNOWN'); entry = float(pos.get('entryPrice', 0))
-                        side = "LONG" if position_amt > 0 else "SHORT"; pnl = float(pos.get('unRealizedProfit', 0))
-                        message += (f"🔹 {symbol} | {side}\n" f"📊 Quantity: {abs(position_amt):.4f}\n" f"🏷️ Entry Price: {entry:.4f}\n" f"💰 PnL: {pnl:.2f} USDT\n\n")
+                        symbol = pos.get('symbol', 'UNKNOWN')
+                        entry = float(pos.get('entryPrice', 0))
+                        side = "LONG" if position_amt > 0 else "SHORT"
+                        pnl = float(pos.get('unRealizedProfit', 0))
+                        message += (f"🔹 {symbol} | {side}\n" 
+                                   f"📊 Quantity: {abs(position_amt):.4f}\n" 
+                                   f"🏷️ Entry Price: {entry:.4f}\n" 
+                                   f"💰 PnL: {pnl:.2f} USDT\n\n")
                 send_telegram(message, chat_id)
-            except Exception as e: send_telegram(f"⚠️ Error getting positions: {str(e)}", chat_id)
-        elif text: self.send_main_menu(chat_id)
+            except Exception as e: 
+                send_telegram(f"⚠️ Error getting positions: {str(e)}", chat_id)
+        elif text: 
+            self.send_main_menu(chat_id)
 
 # ========== MAIN FUNCTION ==========
 def perform_initial_training(manager, bot_configs):
-    """Log thông báo bot configs bị bỏ qua vì logic Dynamic Hunter."""
     manager.log("⚠️ Bot configurations from environment variables are ignored because the current strategy requires dynamic symbol selection.")
 
 def main():
     manager = BotManager()
 
-    if BOT_CONFIGS: perform_initial_training(manager, BOT_CONFIGS) 
+    if BOT_CONFIGS: 
+        perform_initial_training(manager, BOT_CONFIGS) 
 
-    try: balance = get_balance(); manager.log(f"💰 INITIAL BALANCE: {balance:.2f} USDT")
-    except Exception as e: manager.log(f"⚠️ Error getting initial balance: {str(e)}")
+    try: 
+        balance = get_balance()
+        manager.log(f"💰 INITIAL BALANCE: {balance:.2f} USDT")
+    except Exception as e: 
+        manager.log(f"⚠️ Error getting initial balance: {str(e)}")
 
     try:
-        while manager.running: time.sleep(1)
-    except KeyboardInterrupt: manager.log("👋 Received stop signal...")
-    except Exception as e: manager.log(f"❌ SYSTEM ERROR: {str(e)}")
-    finally: manager.stop_all()
+        while manager.running: 
+            time.sleep(1)
+    except KeyboardInterrupt: 
+        manager.log("👋 Received stop signal...")
+    except Exception as e: 
+        manager.log(f"❌ SYSTEM ERROR: {str(e)}")
+    finally: 
+        manager.stop_all()
 
 if __name__ == "__main__":
     main()
