@@ -672,10 +672,28 @@ class IndicatorBot:
                 close_qty = max(close_qty, 0); close_qty = round(close_qty, 8)
                 
                 res = place_order(self.symbol, close_side, close_qty)
-                if res:
+                
+                # === LOGIC XỬ LÝ GIÁ ĐÓNG LỆNH (FIX LỖI 0.0000 VÀ ROI LỚN) ===
+                price = 0
+                if res and res.get('status') == 'FILLED':
+                    # Lấy giá từ phản hồi lệnh nếu lệnh đã khớp
                     price = float(res.get('avgPrice', 0))
+                
+                # Nếu không nhận được giá hợp lệ từ lệnh, lấy giá hiện tại làm fallback (QUAN TRỌNG)
+                if price <= 0:
+                    fallback_price = get_current_price(self.symbol)
+                    if fallback_price > 0:
+                        price = fallback_price
+                        self.log(f"⚠️ Warning: Using fallback price {price:.4f} for ROI calculation.", is_critical=False)
+                # ==========================================================
+                
+                if price > 0:
+                    # Tạm thời cập nhật giá đóng lệnh để tính ROI chính xác
+                    original_prices = list(self.prices) 
+                    self.prices.append(price)
                     roi = self.calculate_roi() 
-
+                    self.prices = original_prices # Đặt lại giá
+                    
                     message = (f"⛔ <b>POSITION CLOSED {self.symbol}</b>\n"
                               f"📌 Reason: {reason}\n"
                               f"🏷️ Exit Price: {price:.4f}\n"
@@ -684,9 +702,18 @@ class IndicatorBot:
                               f"🔥 ROI: {roi:.2f}%")
                     self.log(message)
                     
-                    self.status = "waiting"; self.side = ""; self.qty = 0; self.entry = 0; self.position_open = False
-                    self.last_trade_time = time.time()
-                else: self.log("❌ Error closing position")
+                    # KIỂM TRA LẠI VỊ THẾ SAU KHI ĐÓNG (QUAN TRỌNG)
+                    time.sleep(1) 
+                    self.check_position_status() 
+
+                    if not self.position_open:
+                        # Chỉ reset trạng thái nếu vị thế đã đóng thành công trên sàn
+                        self.status = "waiting"; self.side = ""; self.qty = 0; self.entry = 0; self.position_open = False
+                        self.last_trade_time = time.time()
+                    else:
+                        self.log("❌ Close order executed, but position is still open. Check manually!", is_critical=True)
+                else: 
+                    self.log("❌ Error closing position: Could not determine exit price (API issue or Symbol closed).")
         except Exception as e: self.log(f"❌ Error closing position: {str(e)}")
 
 # ========== BOT MANAGER (Logic tạo hàng loạt bot) ==========
