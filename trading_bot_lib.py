@@ -78,7 +78,7 @@ def create_cancel_keyboard():
     }
 
 def create_strategy_keyboard():
-    """Bàn phím chọn chiến lược giao dịch"""
+    """Bàn phím chọn chiến lược giao dịch - BƯỚC ĐẦU TIÊN"""
     return {
         "keyboard": [
             [{"text": "🤖 RSI/EMA Recursive"}, {"text": "📊 EMA Crossover"}],
@@ -90,11 +90,18 @@ def create_strategy_keyboard():
         "one_time_keyboard": True
     }
 
-def create_symbols_keyboard():
-    popular_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT", "BCHUSDT"]
+def create_symbols_keyboard(strategy=None):
+    """Bàn phím chọn coin - có thể tùy chỉnh theo chiến lược"""
+    if strategy == "Reverse 24h":
+        # Ưu tiên các coin có biến động mạnh
+        volatile_symbols = get_top_volatile_symbols(limit=8, threshold=20)
+    else:
+        # Các coin phổ biến cho chiến lược khác
+        volatile_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+    
     keyboard = []
     row = []
-    for symbol in popular_symbols:
+    for symbol in volatile_symbols:
         row.append({"text": symbol})
         if len(row) == 3:
             keyboard.append(row)
@@ -109,8 +116,17 @@ def create_symbols_keyboard():
         "one_time_keyboard": True
     }
 
-def create_leverage_keyboard():
-    leverages = ["3", "5", "10", "15", "20", "25", "30", "50", "75", "100"]
+def create_leverage_keyboard(strategy=None):
+    """Bàn phím chọn đòn bẩy - có thể tùy chỉnh theo chiến lược"""
+    if strategy == "Scalping":
+        leverages = ["3", "5", "10", "15", "20"]
+    elif strategy == "Reverse 24h":
+        leverages = ["3", "5", "8", "10", "15"]
+    elif strategy == "Safe Grid":
+        leverages = ["3", "5", "8", "10"]
+    else:
+        leverages = ["3", "5", "10", "15", "20", "25", "30"]
+    
     keyboard = []
     row = []
     for lev in leverages:
@@ -127,6 +143,41 @@ def create_leverage_keyboard():
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
+
+def get_top_volatile_symbols(limit=10, threshold=20):
+    """Lấy danh sách coin có biến động 24h cao nhất"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        data = binance_api_request(url)
+        if not data:
+            return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT"]
+        
+        # Lọc các symbol USDT và có biến động > threshold
+        volatile_pairs = []
+        for ticker in data:
+            symbol = ticker.get('symbol', '')
+            if symbol.endswith('USDT'):
+                change = float(ticker.get('priceChangePercent', 0))
+                if abs(change) >= threshold:
+                    volatile_pairs.append((symbol, abs(change)))
+        
+        # Sắp xếp theo biến động giảm dần
+        volatile_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Lấy top limit
+        top_symbols = [pair[0] for pair in volatile_pairs[:limit]]
+        
+        # Nếu không đủ, thêm các symbol mặc định
+        default_symbols = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT", "SOLUSDT"]
+        for symbol in default_symbols:
+            if len(top_symbols) < limit and symbol not in top_symbols:
+                top_symbols.append(symbol)
+        
+        return top_symbols[:limit]
+        
+    except Exception as e:
+        logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
+        return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT"]
 
 # ========== API BINANCE ==========
 def sign(query, api_secret):
@@ -421,70 +472,6 @@ class WebSocketManager:
         self._stop_event.set()
         for symbol in list(self.connections.keys()):
             self.remove_symbol(symbol)
-
-# ========== CANDLE CLASS ==========
-class Candle:
-    def __init__(self, timestamp, open_price, high_price, low_price, close_price, volume):
-        self.timestamp = int(timestamp)
-        self.open = float(open_price)
-        self.high = float(high_price)
-        self.low = float(low_price)
-        self.close = float(close_price)
-        self.volume = float(volume)
-
-    @classmethod
-    def from_binance(cls, kline):
-        if not isinstance(kline, list) or len(kline) < 6:
-            raise ValueError(f"❌ Dữ liệu nến không hợp lệ: {kline}")
-
-        try:
-            return cls(
-                timestamp=kline[0],
-                open_price=kline[1],
-                high_price=kline[2],
-                low_price=kline[3],
-                close_price=kline[4],
-                volume=kline[5]
-            )
-        except (TypeError, ValueError, IndexError) as e:
-            raise ValueError(f"❌ Lỗi khi tạo Candle từ dữ liệu: {kline} → {str(e)}")
-
-    def body_size(self):
-        return abs(self.close - self.open)
-
-    def candle_range(self):
-        return self.high - self.low
-
-    def direction(self):
-        if self.close > self.open:
-            return "BUY"
-        elif self.close < self.open:
-            return "SELL"
-        return "DOJI"
-
-    def average_price(self):
-        return (self.open + self.close) / 2
-    
-    def upper_wick(self):
-        return self.high - max(self.open, self.close)
-
-    def lower_wick(self):
-        return min(self.open, self.close) - self.low
-    
-    def wick_direction(self):
-        upper = self.upper_wick()
-        lower = self.lower_wick()
-        body =  self.body_size()
-
-        if upper > lower and upper >= body:
-            return "UP"
-        if lower > upper and lower >= body:
-            return "DOWN"
-        else:
-            return "BALANCED"
-    
-    def __str__(self):
-        return f"[{self.timestamp}] O:{self.open} H:{self.high} L:{self.low} C:{self.close} V:{self.volume}"
 
 # ========== BASE BOT CLASS ==========
 class BaseBot:
@@ -1266,22 +1253,8 @@ class BotManager:
         user_state = self.user_states.get(chat_id, {})
         current_step = user_state.get('step')
         
-        # Xử lý theo bước hiện tại
-        if current_step == 'waiting_symbol':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                symbol = text.upper()
-                self.user_states[chat_id] = {
-                    'step': 'waiting_strategy',
-                    'symbol': symbol
-                }
-                send_telegram(f"Chọn chiến lược cho {symbol}:", chat_id, create_strategy_keyboard(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-        
-        elif current_step == 'waiting_strategy':
+        # Xử lý theo bước hiện tại - FLOW MỚI: CHIẾN LƯỢC TRƯỚC, COIN SAU
+        if current_step == 'waiting_strategy':
             if text == '❌ Hủy bỏ':
                 self.user_states[chat_id] = {}
                 send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
@@ -1298,13 +1271,42 @@ class BotManager:
                 }
                 strategy = strategy_map[text]
                 user_state['strategy'] = strategy
-                user_state['step'] = 'waiting_leverage'
+                user_state['step'] = 'waiting_symbol'
+                
+                # Hiển thị thông tin chiến lược và chọn coin
+                strategy_info = self._get_strategy_info(strategy)
                 send_telegram(
-                    f"📌 Cặp: {user_state['symbol']}\n"
-                    f"🎯 Chiến lược: {strategy}\n\n"
+                    f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
+                    f"{strategy_info}\n\n"
+                    f"Chọn cặp coin:",
+                    chat_id,
+                    create_symbols_keyboard(strategy),
+                    self.telegram_bot_token, self.telegram_chat_id
+                )
+        
+        elif current_step == 'waiting_symbol':
+            if text == '❌ Hủy bỏ':
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
+                            self.telegram_bot_token, self.telegram_chat_id)
+            else:
+                symbol = text.upper()
+                user_state['symbol'] = symbol
+                user_state['step'] = 'waiting_leverage'
+                
+                # Đặc biệt với Reverse 24h, hiển thị biến động hiện tại
+                extra_info = ""
+                if user_state.get('strategy') == "Reverse 24h":
+                    change_24h = get_24h_change(symbol)
+                    extra_info = f"\n📊 Biến động 24h hiện tại: {change_24h:.2f}%"
+                
+                send_telegram(
+                    f"📌 <b>ĐÃ CHỌN: {symbol}</b>\n"
+                    f"🎯 Chiến lược: {user_state['strategy']}"
+                    f"{extra_info}\n\n"
                     f"Chọn đòn bẩy:",
                     chat_id,
-                    create_leverage_keyboard(),
+                    create_leverage_keyboard(user_state.get('strategy')),
                     self.telegram_bot_token, self.telegram_chat_id
                 )
         
@@ -1401,14 +1403,23 @@ class BotManager:
                         tp = user_state['tp']
                         
                         if self.add_bot(symbol, leverage, percent, tp, sl, strategy):
-                            send_telegram(
+                            success_msg = (
                                 f"✅ <b>ĐÃ THÊM BOT THÀNH CÔNG</b>\n\n"
                                 f"📌 Cặp: {symbol}\n"
                                 f"🎯 Chiến lược: {strategy}\n"
                                 f" Đòn bẩy: {leverage}x\n"
                                 f"📊 % Số dư: {percent}%\n"
                                 f"🎯 TP: {tp}%\n"
-                                f"🛡️ SL: {sl}%",
+                                f"🛡️ SL: {sl}%"
+                            )
+                            
+                            # Thêm thông tin đặc biệt cho Reverse 24h
+                            if strategy == "Reverse 24h":
+                                change_24h = get_24h_change(symbol)
+                                success_msg += f"\n📊 Biến động 24h hiện tại: {change_24h:.2f}%"
+                            
+                            send_telegram(
+                                success_msg,
                                 chat_id,
                                 create_main_menu(),
                                 self.telegram_bot_token, self.telegram_chat_id
@@ -1440,9 +1451,21 @@ class BotManager:
                             bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
         
         elif text == "➕ Thêm Bot":
-            self.user_states[chat_id] = {'step': 'waiting_symbol'}
-            send_telegram("Chọn cặp coin:", chat_id, create_symbols_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id)
+            # BẮT ĐẦU FLOW MỚI: CHỌN CHIẾN LƯỢC TRƯỚC
+            self.user_states[chat_id] = {'step': 'waiting_strategy'}
+            
+            # Lấy danh sách coin biến động mạnh để gợi ý
+            volatile_coins = get_top_volatile_symbols(limit=5, threshold=15)
+            volatile_info = "\n".join([f"🔸 {coin}" for coin in volatile_coins[:3]])
+            
+            send_telegram(
+                f"🎯 <b>CHỌN CHIẾN LƯỢC GIAO DỊCH</b>\n\n"
+                f"💡 <b>Gợi ý cho Reverse 24h:</b>\n{volatile_info}\n\n"
+                f"Chọn chiến lược phù hợp:",
+                chat_id,
+                create_strategy_keyboard(),
+                self.telegram_bot_token, self.telegram_chat_id
+            )
         
         elif text == "⛔ Dừng Bot":
             if not self.bots:
@@ -1529,6 +1552,7 @@ class BotManager:
                 "   - Phù hợp: Trend Trading\n\n"
                 "🎯 <b>Reverse 24h</b>\n"
                 "   - Đảo chiều biến động 24h\n"
+                "   - Tự động chọn coin biến động mạnh\n"
                 "   - Phù hợp: Mean Reversion\n\n"
                 "📈 <b>Trend Following</b>\n"
                 "   - Theo xu hướng EMA + RSI\n"
@@ -1557,3 +1581,15 @@ class BotManager:
         # Gửi lại menu nếu không có lệnh phù hợp
         elif text:
             self.send_main_menu(chat_id)
+
+    def _get_strategy_info(self, strategy):
+        """Lấy thông tin mô tả chiến lược"""
+        info_map = {
+            "RSI/EMA Recursive": "📊 Phân tích RSI kết hợp EMA đệ quy\n⏱️ Khung: 1m-5m\n🎯 Tín hiệu: RSI quá mua/quá bán + EMA trend",
+            "EMA Crossover": "📈 Giao cắt EMA nhanh (9) và chậm (21)\n⏱️ Khung: 5m-15m\n🎯 Tín hiệu: EMA nhanh cắt lên/xuống EMA chậm",
+            "Reverse 24h": "🎯 Đảo chiều biến động 24h mạnh\n⏱️ Kiểm tra: 5 phút/lần\n🎯 Ngưỡng: ±30% biến động\n💡 Tự động chọn coin biến động",
+            "Trend Following": "📈 Theo xu hướng EMA 20 + RSI\n⏱️ Khung: 15m-1h\n🎯 Tín hiệu: Giá > EMA & RSI > 50 (BUY), Giá < EMA & RSI < 50 (SELL)",
+            "Scalping": "⚡ Giao dịch tốc độ cao\n⏱️ Khung: 1m\n🎯 Tín hiệu: Biến động nhanh >1%\n⏳ Cooldown: 5 phút",
+            "Safe Grid": "🛡️ Grid an toàn nhiều lệnh\n📊 Số lệnh: 5 levels\n🎯 Chiến lược: Phân bổ rủi ro"
+        }
+        return info_map.get(strategy, "Chiến lược giao dịch tùy chỉnh")
