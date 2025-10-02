@@ -24,6 +24,8 @@ def main():
         print("❌ Chưa cấu hình API Key và Secret Key!")
         return
     
+    print("🟢 Đang khởi động hệ thống bot...")
+    
     # Khởi tạo hệ thống
     manager = BotManager(
         api_key=BINANCE_API_KEY,
@@ -34,24 +36,28 @@ def main():
     
     # Thêm các bot từ cấu hình
     if BOT_CONFIGS:
+        print(f"🟢 Đang khởi động {len(BOT_CONFIGS)} bot từ cấu hình...")
         for config in BOT_CONFIGS:
             if len(config) >= 6:
                 symbol, lev, percent, tp, sl, strategy = config[0], config[1], config[2], config[3], config[4], config[5]
                 if manager.add_bot(symbol, lev, percent, tp, sl, strategy):
-                    manager.log(f"✅ Bot {strategy} cho {symbol} khởi động thành công")
+                    print(f"✅ Bot {strategy} cho {symbol} khởi động thành công")
                 else:
-                    manager.log(f"❌ Bot {strategy} cho {symbol} khởi động thất bại")
+                    print(f"❌ Bot {strategy} cho {symbol} khởi động thất bại")
     else:
-        manager.log("⚠️ Không tìm thấy cấu hình bot! Vui lòng thiết lập biến môi trường BOT_CONFIGS.")
+        print("⚠️ Không tìm thấy cấu hình bot! Vui lòng thiết lập biến môi trường BOT_CONFIGS.")
     
     try:
+        print("🟢 Hệ thống đã sẵn sàng. Đang chạy...")
         # Giữ chương trình chạy
         while manager.running:
             time.sleep(1)
             
     except KeyboardInterrupt:
+        print("\n👋 Nhận tín hiệu dừng từ người dùng...")
         manager.log("👋 Nhận tín hiệu dừng từ người dùng...")
     except Exception as e:
+        print(f"❌ LỖI HỆ THỐNG: {str(e)}")
         manager.log(f"❌ LỖI HỆ THỐNG: {str(e)}")
     finally:
         manager.stop_all()
