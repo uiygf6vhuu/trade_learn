@@ -90,32 +90,6 @@ def create_strategy_keyboard():
         "one_time_keyboard": True
     }
 
-def create_symbols_keyboard(strategy=None):
-    """Bàn phím chọn coin - có thể tùy chỉnh theo chiến lược"""
-    if strategy == "Reverse 24h":
-        # Ưu tiên các coin có biến động mạnh
-        volatile_symbols = get_top_volatile_symbols(limit=8, threshold=20)
-    else:
-        # Các coin phổ biến cho chiến lược khác
-        volatile_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
-    
-    keyboard = []
-    row = []
-    for symbol in volatile_symbols:
-        row.append({"text": symbol})
-        if len(row) == 3:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([{"text": "❌ Hủy bỏ"}])
-    
-    return {
-        "keyboard": keyboard,
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
-
 def create_leverage_keyboard(strategy=None):
     """Bàn phím chọn đòn bẩy - có thể tùy chỉnh theo chiến lược"""
     if strategy == "Scalping":
@@ -144,13 +118,13 @@ def create_leverage_keyboard(strategy=None):
         "one_time_keyboard": True
     }
 
-def get_top_volatile_symbols(limit=10, threshold=20):
+def get_top_volatile_symbols(limit=3, threshold=20):
     """Lấy danh sách coin có biến động 24h cao nhất"""
     try:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
         if not data:
-            return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT"]
+            return ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
         
         # Lọc các symbol USDT và có biến động > threshold
         volatile_pairs = []
@@ -177,7 +151,7 @@ def get_top_volatile_symbols(limit=10, threshold=20):
         
     except Exception as e:
         logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
-        return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT"]
+        return ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 
 # ========== API BINANCE ==========
 def sign(query, api_secret):
@@ -948,13 +922,24 @@ class EMACrossoverBot(BaseBot):
         return self.get_ema_crossover_signal()
 
 class Reverse24hBot(BaseBot):
-    """Bot sử dụng chiến lược đảo chiều biến động 24h"""
+    """Bot sử dụng chiến lược đảo chiều biến động 24h - TỰ ĐỘNG LẤY 3 COIN BIẾN ĐỘNG MẠNH NHẤT"""
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
         self.threshold = threshold
         self.last_signal_check = 0
         self.signal_check_interval = 300  # 5 phút
+        self.auto_symbols = []  # Lưu trữ danh sách symbol tự động
+
+    def get_auto_symbols(self):
+        """Tự động lấy 3 coin có biến động mạnh nhất"""
+        try:
+            symbols = get_top_volatile_symbols(limit=3, threshold=self.threshold)
+            self.auto_symbols = symbols
+            return symbols
+        except Exception as e:
+            self.log(f"Lỗi lấy danh sách coin tự động: {str(e)}")
+            return ["BTCUSDT", "ETHUSDT", "ADAUSDT"]
 
     def get_signal(self):
         current_time = time.time()
@@ -964,20 +949,61 @@ class Reverse24hBot(BaseBot):
         self.last_signal_check = current_time
         
         try:
+            # Kiểm tra nếu symbol hiện tại nằm trong danh sách biến động mạnh
+            if not self.auto_symbols:
+                self.get_auto_symbols()
+            
+            # Đảm bảo symbol hiện tại có trong danh sách auto_symbols
+            if self.symbol not in self.auto_symbols:
+                return None
+            
             change_24h = get_24h_change(self.symbol)
             
+            # Logic đảo chiều: nếu tăng mạnh thì bán, giảm mạnh thì mua
             if abs(change_24h) >= self.threshold:
                 if change_24h > 0:
-                    self.log(f"📈 Biến động 24h: {change_24h:.2f}% -> Tín hiệu SELL")
+                    signal_info = (
+                        f"🎯 <b>TÍN HIỆU REVERSE 24H - SELL</b>\n"
+                        f"📊 Biến động 24h: {change_24h:+.2f}%\n"
+                        f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
+                        f" Đòn bẩy: {self.lev}x\n"
+                        f"📊 % vốn: {self.percent}%\n"
+                        f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%"
+                    )
+                    self.log(signal_info)
                     return "SELL"
                 else:
-                    self.log(f"📉 Biến động 24h: {change_24h:.2f}% -> Tín hiệu BUY")
+                    signal_info = (
+                        f"🎯 <b>TÍN HIỆU REVERSE 24H - BUY</b>\n"
+                        f"📊 Biến động 24h: {change_24h:+.2f}%\n"
+                        f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
+                        f" Đòn bẩy: {self.lev}x\n"
+                        f"📊 % vốn: {self.percent}%\n"
+                        f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%"
+                    )
+                    self.log(signal_info)
                     return "BUY"
             
             return None
+            
         except Exception as e:
             self.log(f"Lỗi tín hiệu Reverse 24h: {str(e)}")
             return None
+
+    def open_position(self, side):
+        """Ghi đè phương thức mở position để thêm thông tin Reverse 24h"""
+        # Thêm thông tin phân tích vào log
+        analysis_msg = (
+            f"📊 <b>PHÂN TÍCH TRƯỚC KHI VÀO LỆNH</b>\n"
+            f"🎯 Chiến lược: Reverse 24h\n"
+            f"📈 Biến động 24h: {get_24h_change(self.symbol):.2f}%\n"
+            f"🎯 Ngưỡng: ±{self.threshold}%\n"
+            f"🤖 Coin tự động: {', '.join(self.auto_symbols) if self.auto_symbols else 'Đang tải...'}"
+        )
+        self.log(analysis_msg)
+        
+        # Gọi phương thức gốc
+        super().open_position(side)
 
 class TrendFollowingBot(BaseBot):
     """Bot theo xu hướng sử dụng EMA và RSI"""
@@ -1108,54 +1134,93 @@ class BotManager:
     def add_bot(self, symbol, lev, percent, tp, sl, strategy_type, **kwargs):
         if sl == 0:
             sl = None
-        symbol = symbol.upper()
-        bot_id = f"{symbol}_{strategy_type}"
+            
+        # XỬ LÝ ĐẶC BIỆT CHO REVERSE 24H - TỰ ĐỘNG LẤY 3 COIN
+        if strategy_type == "Reverse 24h":
+            threshold = kwargs.get('threshold', 30)
+            
+            # Lấy 3 coin biến động mạnh nhất
+            auto_symbols = get_top_volatile_symbols(limit=3, threshold=threshold)
+            
+            if not auto_symbols:
+                self.log("❌ Không tìm thấy coin nào đạt ngưỡng biến động")
+                return False
+            
+            success_count = 0
+            for auto_symbol in auto_symbols:
+                bot_id = f"{auto_symbol}_{strategy_type}"
+                
+                if bot_id in self.bots:
+                    self.log(f"⚠️ Đã có bot {strategy_type} cho {auto_symbol}")
+                    continue
+                    
+                if not self.api_key or not self.api_secret:
+                    self.log("❌ Chưa cấu hình API Key và Secret Key!")
+                    return False
+                
+                try:
+                    price = get_current_price(auto_symbol)
+                    if price <= 0:
+                        self.log(f"❌ Không thể lấy giá cho {auto_symbol}")
+                        continue
+                    
+                    bot = Reverse24hBot(auto_symbol, lev, percent, tp, sl, self.ws_manager,
+                                       self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id, threshold)
+                    self.bots[bot_id] = bot
+                    success_count += 1
+                    
+                except Exception as e:
+                    self.log(f"❌ Lỗi tạo bot {auto_symbol}: {str(e)}")
+            
+            self.log(f"✅ Đã thêm {success_count} bot Reverse 24h tự động")
+            return success_count > 0
         
-        if bot_id in self.bots:
-            self.log(f"⚠️ Đã có bot {strategy_type} cho {symbol}")
-            return False
+        # CÁC CHIẾN LƯỢC KHÁC GIỮ NGUYÊN
+        else:
+            symbol = symbol.upper()
+            bot_id = f"{symbol}_{strategy_type}"
             
-        if not self.api_key or not self.api_secret:
-            self.log("❌ Chưa cấu hình API Key và Secret Key!")
-            return False
-            
-        try:
-            price = get_current_price(symbol)
-            if price <= 0:
-                self.log(f"❌ Không thể lấy giá cho {symbol}")
+            if bot_id in self.bots:
+                self.log(f"⚠️ Đã có bot {strategy_type} cho {symbol}")
                 return False
-            
-            # Tạo bot theo chiến lược
-            if strategy_type == "RSI/EMA Recursive":
-                bot = RSIEMABot(symbol, lev, percent, tp, sl, self.ws_manager, 
-                               self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
-            elif strategy_type == "EMA Crossover":
-                bot = EMACrossoverBot(symbol, lev, percent, tp, sl, self.ws_manager,
+                
+            if not self.api_key or not self.api_secret:
+                self.log("❌ Chưa cấu hình API Key và Secret Key!")
+                return False
+                
+            try:
+                price = get_current_price(symbol)
+                if price <= 0:
+                    self.log(f"❌ Không thể lấy giá cho {symbol}")
+                    return False
+                
+                # Tạo bot theo chiến lược
+                if strategy_type == "RSI/EMA Recursive":
+                    bot = RSIEMABot(symbol, lev, percent, tp, sl, self.ws_manager, 
+                                   self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
+                elif strategy_type == "EMA Crossover":
+                    bot = EMACrossoverBot(symbol, lev, percent, tp, sl, self.ws_manager,
+                                         self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
+                elif strategy_type == "Trend Following":
+                    bot = TrendFollowingBot(symbol, lev, percent, tp, sl, self.ws_manager,
+                                           self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
+                elif strategy_type == "Scalping":
+                    bot = ScalpingBot(symbol, lev, percent, tp, sl, self.ws_manager,
                                      self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
-            elif strategy_type == "Reverse 24h":
-                threshold = kwargs.get('threshold', 30)
-                bot = Reverse24hBot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                   self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id, threshold)
-            elif strategy_type == "Trend Following":
-                bot = TrendFollowingBot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                       self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
-            elif strategy_type == "Scalping":
-                bot = ScalpingBot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                 self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
-            elif strategy_type == "Safe Grid":
-                bot = SafeGridBot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                 self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                self.log(f"❌ Chiến lược {strategy_type} không được hỗ trợ")
+                elif strategy_type == "Safe Grid":
+                    bot = SafeGridBot(symbol, lev, percent, tp, sl, self.ws_manager,
+                                     self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id)
+                else:
+                    self.log(f"❌ Chiến lược {strategy_type} không được hỗ trợ")
+                    return False
+                
+                self.bots[bot_id] = bot
+                self.log(f"✅ Đã thêm bot {strategy_type}: {symbol} | ĐB: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
+                return True
+                
+            except Exception as e:
+                self.log(f"❌ Lỗi tạo bot {symbol}: {str(e)}")
                 return False
-            
-            self.bots[bot_id] = bot
-            self.log(f"✅ Đã thêm bot {strategy_type}: {symbol} | ĐB: {lev}x | %: {percent} | TP/SL: {tp}%/{sl}%")
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi tạo bot {symbol}: {str(e)}")
-            return False
 
     def stop_bot(self, bot_id):
         bot = self.bots.get(bot_id)
@@ -1253,7 +1318,7 @@ class BotManager:
         user_state = self.user_states.get(chat_id, {})
         current_step = user_state.get('step')
         
-        # Xử lý theo bước hiện tại - FLOW MỚI: CHIẾN LƯỢC TRƯỚC, COIN SAU
+        # Xử lý theo bước hiện tại
         if current_step == 'waiting_strategy':
             if text == '❌ Hủy bỏ':
                 self.user_states[chat_id] = {}
@@ -1271,18 +1336,61 @@ class BotManager:
                 }
                 strategy = strategy_map[text]
                 user_state['strategy'] = strategy
-                user_state['step'] = 'waiting_symbol'
                 
-                # Hiển thị thông tin chiến lược và chọn coin
-                strategy_info = self._get_strategy_info(strategy)
-                send_telegram(
-                    f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                    f"{strategy_info}\n\n"
-                    f"Chọn cặp coin:",
-                    chat_id,
-                    create_symbols_keyboard(strategy),
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
+                # XỬ LÝ ĐẶC BIỆT CHO REVERSE 24H - BỎ QUA BƯỚC CHỌN COIN
+                if strategy == "Reverse 24h":
+                    user_state['step'] = 'waiting_threshold'
+                    send_telegram(
+                        f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
+                        f"🤖 Bot sẽ tự động chọn 3 coin biến động mạnh nhất\n\n"
+                        f"Nhập ngưỡng biến động (%):\n"
+                        f"(Ví dụ: 30 → tìm coin có biến động ≥30%)",
+                        chat_id,
+                        create_cancel_keyboard(),
+                        self.telegram_bot_token, self.telegram_chat_id
+                    )
+                else:
+                    user_state['step'] = 'waiting_symbol'
+                    send_telegram(
+                        f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
+                        f"Chọn cặp coin:",
+                        chat_id,
+                        create_symbols_keyboard(strategy),
+                        self.telegram_bot_token, self.telegram_chat_id
+                    )
+        
+        # BƯỚC MỚI: NHẬP THRESHOLD CHO REVERSE 24H
+        elif current_step == 'waiting_threshold':
+            if text == '❌ Hủy bỏ':
+                self.user_states[chat_id] = {}
+                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
+                            self.telegram_bot_token, self.telegram_chat_id)
+            else:
+                try:
+                    threshold = float(text)
+                    if threshold > 0:
+                        user_state['threshold'] = threshold
+                        user_state['step'] = 'waiting_leverage'
+                        
+                        # Hiển thị các coin sẽ được chọn tự động
+                        auto_symbols = get_top_volatile_symbols(limit=3, threshold=threshold)
+                        symbols_info = "\n".join([f"🔸 {symbol}" for symbol in auto_symbols]) if auto_symbols else "Không có coin nào đạt ngưỡng"
+                        
+                        send_telegram(
+                            f"🎯 <b>THIẾT LẬP REVERSE 24H</b>\n"
+                            f"📊 Ngưỡng biến động: {threshold}%\n"
+                            f"🤖 Coin tự động: {symbols_info}\n\n"
+                            f"Chọn đòn bẩy:",
+                            chat_id,
+                            create_leverage_keyboard(user_state.get('strategy')),
+                            self.telegram_bot_token, self.telegram_chat_id
+                        )
+                    else:
+                        send_telegram("⚠️ Ngưỡng phải lớn hơn 0", chat_id,
+                                    bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
+                except:
+                    send_telegram("⚠️ Giá trị không hợp lệ, vui lòng nhập số", chat_id,
+                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
         
         elif current_step == 'waiting_symbol':
             if text == '❌ Hủy bỏ':
@@ -1293,17 +1401,9 @@ class BotManager:
                 symbol = text.upper()
                 user_state['symbol'] = symbol
                 user_state['step'] = 'waiting_leverage'
-                
-                # Đặc biệt với Reverse 24h, hiển thị biến động hiện tại
-                extra_info = ""
-                if user_state.get('strategy') == "Reverse 24h":
-                    change_24h = get_24h_change(symbol)
-                    extra_info = f"\n📊 Biến động 24h hiện tại: {change_24h:.2f}%"
-                
                 send_telegram(
                     f"📌 <b>ĐÃ CHỌN: {symbol}</b>\n"
-                    f"🎯 Chiến lược: {user_state['strategy']}"
-                    f"{extra_info}\n\n"
+                    f"🎯 Chiến lược: {user_state['strategy']}\n\n"
                     f"Chọn đòn bẩy:",
                     chat_id,
                     create_leverage_keyboard(user_state.get('strategy')),
@@ -1319,15 +1419,28 @@ class BotManager:
                 leverage = int(text.replace('', '').replace('x', '').strip())
                 user_state['leverage'] = leverage
                 user_state['step'] = 'waiting_percent'
-                send_telegram(
-                    f"📌 Cặp: {user_state['symbol']}\n"
-                    f"🎯 Chiến lược: {user_state['strategy']}\n"
-                    f" Đòn bẩy: {leverage}x\n\n"
-                    f"Nhập % số dư muốn sử dụng (1-100):",
-                    chat_id,
-                    create_cancel_keyboard(),
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
+                
+                # Hiển thị thông tin khác nhau cho Reverse 24h
+                if user_state.get('strategy') == "Reverse 24h":
+                    send_telegram(
+                        f"🎯 Chiến lược: {user_state['strategy']}\n"
+                        f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
+                        f" Đòn bẩy: {leverage}x\n\n"
+                        f"Nhập % số dư muốn sử dụng (1-100):",
+                        chat_id,
+                        create_cancel_keyboard(),
+                        self.telegram_bot_token, self.telegram_chat_id
+                    )
+                else:
+                    send_telegram(
+                        f"📌 Cặp: {user_state['symbol']}\n"
+                        f"🎯 Chiến lược: {user_state['strategy']}\n"
+                        f" Đòn bẩy: {leverage}x\n\n"
+                        f"Nhập % số dư muốn sử dụng (1-100):",
+                        chat_id,
+                        create_cancel_keyboard(),
+                        self.telegram_bot_token, self.telegram_chat_id
+                    )
         
         elif current_step == 'waiting_percent':
             if text == '❌ Hủy bỏ':
@@ -1340,16 +1453,29 @@ class BotManager:
                     if 1 <= percent <= 100:
                         user_state['percent'] = percent
                         user_state['step'] = 'waiting_tp'
-                        send_telegram(
-                            f"📌 Cặp: {user_state['symbol']}\n"
-                            f"🎯 Chiến lược: {user_state['strategy']}\n"
-                            f" ĐB: {user_state['leverage']}x\n"
-                            f"📊 %: {percent}%\n\n"
-                            f"Nhập % Take Profit (ví dụ: 10):",
-                            chat_id,
-                            create_cancel_keyboard(),
-                            self.telegram_bot_token, self.telegram_chat_id
-                        )
+                        
+                        if user_state.get('strategy') == "Reverse 24h":
+                            send_telegram(
+                                f"🎯 Chiến lược: {user_state['strategy']}\n"
+                                f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
+                                f" ĐB: {user_state['leverage']}x\n"
+                                f"📊 %: {percent}%\n\n"
+                                f"Nhập % Take Profit (ví dụ: 10):",
+                                chat_id,
+                                create_cancel_keyboard(),
+                                self.telegram_bot_token, self.telegram_chat_id
+                            )
+                        else:
+                            send_telegram(
+                                f"📌 Cặp: {user_state['symbol']}\n"
+                                f"🎯 Chiến lược: {user_state['strategy']}\n"
+                                f" ĐB: {user_state['leverage']}x\n"
+                                f"📊 %: {percent}%\n\n"
+                                f"Nhập % Take Profit (ví dụ: 10):",
+                                chat_id,
+                                create_cancel_keyboard(),
+                                self.telegram_bot_token, self.telegram_chat_id
+                            )
                     else:
                         send_telegram("⚠️ Vui lòng nhập % từ 1-100", chat_id,
                                     bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1368,17 +1494,31 @@ class BotManager:
                     if tp > 0:
                         user_state['tp'] = tp
                         user_state['step'] = 'waiting_sl'
-                        send_telegram(
-                            f"📌 Cặp: {user_state['symbol']}\n"
-                            f"🎯 Chiến lược: {user_state['strategy']}\n"
-                            f" ĐB: {user_state['leverage']}x\n"
-                            f"📊 %: {user_state['percent']}%\n"
-                            f"🎯 TP: {tp}%\n\n"
-                            f"Nhập % Stop Loss (ví dụ: 5, 0 để tắt SL):",
-                            chat_id,
-                            create_cancel_keyboard(),
-                            self.telegram_bot_token, self.telegram_chat_id
-                        )
+                        
+                        if user_state.get('strategy') == "Reverse 24h":
+                            send_telegram(
+                                f"🎯 Chiến lược: {user_state['strategy']}\n"
+                                f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
+                                f" ĐB: {user_state['leverage']}x\n"
+                                f"📊 %: {user_state['percent']}%\n"
+                                f"🎯 TP: {tp}%\n\n"
+                                f"Nhập % Stop Loss (ví dụ: 5, 0 để tắt SL):",
+                                chat_id,
+                                create_cancel_keyboard(),
+                                self.telegram_bot_token, self.telegram_chat_id
+                            )
+                        else:
+                            send_telegram(
+                                f"📌 Cặp: {user_state['symbol']}\n"
+                                f"🎯 Chiến lược: {user_state['strategy']}\n"
+                                f" ĐB: {user_state['leverage']}x\n"
+                                f"📊 %: {user_state['percent']}%\n"
+                                f"🎯 TP: {tp}%\n\n"
+                                f"Nhập % Stop Loss (ví dụ: 5, 0 để tắt SL):",
+                                chat_id,
+                                create_cancel_keyboard(),
+                                self.telegram_bot_token, self.telegram_chat_id
+                            )
                     else:
                         send_telegram("⚠️ TP phải lớn hơn 0", chat_id,
                                     bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1395,38 +1535,58 @@ class BotManager:
                 try:
                     sl = float(text)
                     if sl >= 0:
-                        # Thêm bot
-                        symbol = user_state['symbol']
+                        # Thêm bot - XỬ LÝ KHÁC NHAU CHO REVERSE 24H
                         strategy = user_state['strategy']
                         leverage = user_state['leverage']
                         percent = user_state['percent']
                         tp = user_state['tp']
                         
-                        if self.add_bot(symbol, leverage, percent, tp, sl, strategy):
-                            success_msg = (
-                                f"✅ <b>ĐÃ THÊM BOT THÀNH CÔNG</b>\n\n"
-                                f"📌 Cặp: {symbol}\n"
-                                f"🎯 Chiến lược: {strategy}\n"
-                                f" Đòn bẩy: {leverage}x\n"
-                                f"📊 % Số dư: {percent}%\n"
-                                f"🎯 TP: {tp}%\n"
-                                f"🛡️ SL: {sl}%"
-                            )
-                            
-                            # Thêm thông tin đặc biệt cho Reverse 24h
-                            if strategy == "Reverse 24h":
-                                change_24h = get_24h_change(symbol)
-                                success_msg += f"\n📊 Biến động 24h hiện tại: {change_24h:.2f}%"
-                            
-                            send_telegram(
-                                success_msg,
-                                chat_id,
-                                create_main_menu(),
-                                self.telegram_bot_token, self.telegram_chat_id
-                            )
+                        if strategy == "Reverse 24h":
+                            # Reverse 24h: không cần symbol, có threshold
+                            threshold = user_state.get('threshold', 30)
+                            if self.add_bot(symbol=None, lev=leverage, percent=percent, tp=tp, sl=sl, 
+                                          strategy_type=strategy, threshold=threshold):
+                                success_msg = (
+                                    f"✅ <b>ĐÃ THÊM BOT REVERSE 24H THÀNH CÔNG</b>\n\n"
+                                    f"🎯 Chiến lược: {strategy}\n"
+                                    f"📊 Ngưỡng biến động: {threshold}%\n"
+                                    f" Đòn bẩy: {leverage}x\n"
+                                    f"📊 % Số dư: {percent}%\n"
+                                    f"🎯 TP: {tp}%\n"
+                                    f"🛡️ SL: {sl}%\n\n"
+                                    f"🤖 Bot sẽ tự động giao dịch trên 3 coin biến động mạnh nhất"
+                                )
+                                send_telegram(
+                                    success_msg,
+                                    chat_id,
+                                    create_main_menu(),
+                                    self.telegram_bot_token, self.telegram_chat_id
+                                )
+                            else:
+                                send_telegram("❌ Không thể thêm bot, vui lòng kiểm tra log", chat_id, create_main_menu(),
+                                            self.telegram_bot_token, self.telegram_chat_id)
                         else:
-                            send_telegram("❌ Không thể thêm bot, vui lòng kiểm tra log", chat_id, create_main_menu(),
-                                        self.telegram_bot_token, self.telegram_chat_id)
+                            # Các chiến lược khác: cần symbol
+                            symbol = user_state['symbol']
+                            if self.add_bot(symbol, leverage, percent, tp, sl, strategy):
+                                success_msg = (
+                                    f"✅ <b>ĐÃ THÊM BOT THÀNH CÔNG</b>\n\n"
+                                    f"📌 Cặp: {symbol}\n"
+                                    f"🎯 Chiến lược: {strategy}\n"
+                                    f" Đòn bẩy: {leverage}x\n"
+                                    f"📊 % Số dư: {percent}%\n"
+                                    f"🎯 TP: {tp}%\n"
+                                    f"🛡️ SL: {sl}%"
+                                )
+                                send_telegram(
+                                    success_msg,
+                                    chat_id,
+                                    create_main_menu(),
+                                    self.telegram_bot_token, self.telegram_chat_id
+                                )
+                            else:
+                                send_telegram("❌ Không thể thêm bot, vui lòng kiểm tra log", chat_id, create_main_menu(),
+                                            self.telegram_bot_token, self.telegram_chat_id)
                         
                         # Reset trạng thái
                         self.user_states[chat_id] = {}
@@ -1451,12 +1611,11 @@ class BotManager:
                             bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
         
         elif text == "➕ Thêm Bot":
-            # BẮT ĐẦU FLOW MỚI: CHỌN CHIẾN LƯỢC TRƯỚC
             self.user_states[chat_id] = {'step': 'waiting_strategy'}
             
-            # Lấy danh sách coin biến động mạnh để gợi ý
-            volatile_coins = get_top_volatile_symbols(limit=5, threshold=15)
-            volatile_info = "\n".join([f"🔸 {coin}" for coin in volatile_coins[:3]])
+            # Hiển thị thông tin đặc biệt cho Reverse 24h
+            volatile_coins = get_top_volatile_symbols(limit=3, threshold=20)
+            volatile_info = "\n".join([f"🔸 {coin}" for coin in volatile_coins])
             
             send_telegram(
                 f"🎯 <b>CHỌN CHIẾN LƯỢC GIAO DỊCH</b>\n\n"
@@ -1552,7 +1711,8 @@ class BotManager:
                 "   - Phù hợp: Trend Trading\n\n"
                 "🎯 <b>Reverse 24h</b>\n"
                 "   - Đảo chiều biến động 24h\n"
-                "   - Tự động chọn coin biến động mạnh\n"
+                "   - TỰ ĐỘNG chọn 3 coin biến động mạnh nhất\n"
+                "   - Người dùng chỉ cần đặt ngưỡng\n"
                 "   - Phù hợp: Mean Reversion\n\n"
                 "📈 <b>Trend Following</b>\n"
                 "   - Theo xu hướng EMA + RSI\n"
@@ -1581,15 +1741,3 @@ class BotManager:
         # Gửi lại menu nếu không có lệnh phù hợp
         elif text:
             self.send_main_menu(chat_id)
-
-    def _get_strategy_info(self, strategy):
-        """Lấy thông tin mô tả chiến lược"""
-        info_map = {
-            "RSI/EMA Recursive": "📊 Phân tích RSI kết hợp EMA đệ quy\n⏱️ Khung: 1m-5m\n🎯 Tín hiệu: RSI quá mua/quá bán + EMA trend",
-            "EMA Crossover": "📈 Giao cắt EMA nhanh (9) và chậm (21)\n⏱️ Khung: 5m-15m\n🎯 Tín hiệu: EMA nhanh cắt lên/xuống EMA chậm",
-            "Reverse 24h": "🎯 Đảo chiều biến động 24h mạnh\n⏱️ Kiểm tra: 5 phút/lần\n🎯 Ngưỡng: ±30% biến động\n💡 Tự động chọn coin biến động",
-            "Trend Following": "📈 Theo xu hướng EMA 20 + RSI\n⏱️ Khung: 15m-1h\n🎯 Tín hiệu: Giá > EMA & RSI > 50 (BUY), Giá < EMA & RSI < 50 (SELL)",
-            "Scalping": "⚡ Giao dịch tốc độ cao\n⏱️ Khung: 1m\n🎯 Tín hiệu: Biến động nhanh >1%\n⏳ Cooldown: 5 phút",
-            "Safe Grid": "🛡️ Grid an toàn nhiều lệnh\n📊 Số lệnh: 5 levels\n🎯 Chiến lược: Phân bổ rủi ro"
-        }
-        return info_map.get(strategy, "Chiến lược giao dịch tùy chỉnh")
