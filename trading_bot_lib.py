@@ -182,11 +182,14 @@ def get_top_volatile_symbols(limit=10, threshold=20):
 def get_qualified_symbols(api_key, api_secret, threshold=30, leverage=3, max_candidates=8, final_limit=3):
     """
     Tìm coin đủ điều kiện: biến động cao + đòn bẩy khả dụng
-    - Bước 1: Lấy coin biến động cao (nhiều ứng viên)
-    - Bước 2: Kiểm tra đòn bẩy trên các coin đó
-    - Bước 3: Trả về số lượng final_limit coin tốt nhất
     """
     try:
+        # KIỂM TRA API KEY TRƯỚC
+        test_balance = get_balance(api_key, api_secret)
+        if test_balance is None:
+            logger.error("❌ KHÔNG THỂ KẾT NỐI BINANCE - Kiểm tra API Key")
+            return []
+        
         # BƯỚC 1: Lấy danh sách coin biến động cao
         volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=threshold)
         
@@ -201,24 +204,25 @@ def get_qualified_symbols(api_key, api_secret, threshold=30, leverage=3, max_can
         
         for symbol in volatile_candidates:
             if len(qualified_symbols) >= final_limit:
-                break  # Đã đủ số lượng
+                break
                 
             try:
-                # Kiểm tra đòn bẩy - CHỈ GỌI API CHO CÁC ỨNG VIÊN TIỀM NĂNG
-                if set_leverage(symbol, leverage, api_key, api_secret):
+                # Kiểm tra đòn bẩy
+                leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
+                
+                if leverage_success:
                     qualified_symbols.append(symbol)
                     logger.info(f"✅ {symbol}: biến động ≥{threshold}% + đòn bẩy {leverage}x")
                 else:
-                    logger.debug(f"❌ {symbol}: đòn bẩy {leverage}x không khả dụng")
+                    logger.warning(f"⚠️ {symbol}: không thể đặt đòn bẩy {leverage}x")
                     
-                # Nghỉ ngắn giữa các API call
                 time.sleep(0.2)
                 
             except Exception as e:
-                logger.debug(f"⚠️ Lỗi kiểm tra {symbol}: {str(e)}")
+                logger.warning(f"⚠️ Lỗi kiểm tra {symbol}: {str(e)}")
                 continue
         
-        logger.info(f"🎯 Kết quả: {len(qualified_symbols)} coin đủ điều kiện: {', '.join(qualified_symbols)}")
+        logger.info(f"🎯 Kết quả: {len(qualified_symbols)} coin đủ điều kiện")
         return qualified_symbols
         
     except Exception as e:
@@ -250,7 +254,17 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                 if response.status == 200:
                     return json.loads(response.read().decode())
                 else:
-                    logger.error(f"Lỗi API ({response.status}): {response.read().decode()}")
+                    error_content = response.read().decode()
+                    logger.error(f"Lỗi API ({response.status}): {error_content}")
+                    
+                    # XỬ LÝ ĐẶC BIỆT CHO LỖI 401
+                    if response.status == 401:
+                        logger.error("❌ LỖI 401 UNAUTHORIZED - Kiểm tra:")
+                        logger.error("1. API Key và Secret Key có đúng không?")
+                        logger.error("2. API Key có quyền Futures không?") 
+                        logger.error("3. IP có được whitelist không?")
+                        return None
+                    
                     if response.status == 429:
                         time.sleep(2 ** attempt)
                     elif response.status >= 500:
@@ -258,6 +272,12 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                     continue
         except urllib.error.HTTPError as e:
             logger.error(f"Lỗi HTTP ({e.code}): {e.reason}")
+            
+            # XỬ LÝ ĐẶC BIỆT CHO LỖI 401
+            if e.code == 401:
+                logger.error("❌ LỖI 401 UNAUTHORIZED - Vui lòng kiểm tra API Key!")
+                return None
+                
             if e.code == 429:
                 time.sleep(2 ** attempt)
             elif e.code >= 500:
@@ -300,11 +320,18 @@ def set_leverage(symbol, lev, api_key, api_secret):
         headers = {'X-MBX-APIKEY': api_key}
         
         response = binance_api_request(url, method='POST', headers=headers)
+        
+        # THAY ĐỔI QUAN TRỌNG: Nếu lỗi 401, coi như không thể đặt đòn bẩy
+        if response is None:
+            logger.error(f"❌ Không thể đặt đòn bẩy cho {symbol} do lỗi xác thực")
+            return False
+            
         if response and 'leverage' in response:
             return True
+        return False
     except Exception as e:
         logger.error(f"Lỗi thiết lập đòn bẩy: {str(e)}")
-    return False
+        return False
 
 def get_balance(api_key, api_secret):
     try:
@@ -317,14 +344,15 @@ def get_balance(api_key, api_secret):
         
         data = binance_api_request(url, headers=headers)
         if not data:
-            return 0
+            return None
             
         for asset in data['assets']:
             if asset['asset'] == 'USDT':
                 return float(asset['availableBalance'])
+        return 0
     except Exception as e:
         logger.error(f"Lỗi lấy số dư: {str(e)}")
-    return 0
+        return None
 
 def place_order(symbol, side, qty, api_key, api_secret):
     try:
@@ -692,6 +720,10 @@ class BaseBot:
                 return
             
             balance = get_balance(self.api_key, self.api_secret)
+            if balance is None:
+                self.log(f"❌ Không thể kết nối Binance - Kiểm tra API Key")
+                return
+                
             if balance <= 0:
                 self.log(f"Không đủ số dư USDT")
                 return
@@ -1161,6 +1193,9 @@ class BotManager:
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         
+        # KIỂM TRA API KEY NGAY KHI KHỞI TẠO
+        self._verify_api_connection()
+        
         self.log("🟢 HỆ THỐNG BOT ĐA CHIẾN LƯỢC ĐÃ KHỞI ĐỘNG")
         
         self.status_thread = threading.Thread(target=self._status_monitor, daemon=True)
@@ -1171,6 +1206,18 @@ class BotManager:
         
         if self.admin_chat_id:
             self.send_main_menu(self.admin_chat_id)
+
+    def _verify_api_connection(self):
+        """Kiểm tra kết nối API ngay khi khởi tạo"""
+        balance = get_balance(self.api_key, self.api_secret)
+        if balance is None:
+            self.log("❌ LỖI: Không thể kết nối Binance API. Kiểm tra:")
+            self.log("1. API Key và Secret Key có đúng không?")
+            self.log("2. API Key có quyền Futures không?")
+            self.log("3. IP có được whitelist không?")
+            self.log("4. Thời gian server có đồng bộ không?")
+        else:
+            self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")
 
     def log(self, message):
         logger.info(f"[SYSTEM] {message}")
@@ -1192,21 +1239,27 @@ class BotManager:
         if sl == 0:
             sl = None
             
-        # XỬ LÝ ĐẶC BIỆT CHO REVERSE 24H - TỰ ĐỘNG LẤY COIN ĐỦ ĐIỀU KIỆN
+        # KIỂM TRA API KEY TRƯỚC KHI THÊM BOT
+        test_balance = get_balance(self.api_key, self.api_secret)
+        if test_balance is None:
+            self.log("❌ LỖI: API Key không hợp lệ. Vui lòng kiểm tra lại!")
+            return False
+            
+        # XỬ LÝ REVERSE 24H
         if strategy_type == "Reverse 24h":
             threshold = kwargs.get('threshold', 30)
             
-            # TÌM COIN ĐỦ 2 ĐIỀU KIỆN: biến động + đòn bẩy
+            # TÌM COIN ĐỦ ĐIỀU KIỆN
             auto_symbols = get_qualified_symbols(
                 self.api_key, self.api_secret, 
                 threshold=threshold, 
-                leverage=lev,  # Đòn bẩy user chọn
-                max_candidates=8,  # Lấy 8 coin biến động cao để kiểm tra
-                final_limit=3      # Chỉ cần 3 coin tốt nhất
+                leverage=lev,
+                max_candidates=8,
+                final_limit=3
             )
             
             if not auto_symbols:
-                self.log(f"❌ Không tìm thấy coin nào thỏa mãn:\n• Biến động ≥{threshold}%\n• Đòn bẩy {lev}x")
+                self.log(f"❌ Không tìm thấy coin nào thỏa mãn điều kiện")
                 return False
             
             success_count = 0
@@ -1219,7 +1272,7 @@ class BotManager:
                     continue
                     
                 try:
-                    # Tạo bot trực tiếp - KHÔNG CẦN KIỂM TRA LẠI vì đã xác nhận đòn bẩy
+                    # Tạo bot
                     bot = Reverse24hBot(auto_symbol, lev, percent, tp, sl, self.ws_manager,
                                        self.api_key, self.api_secret, self.telegram_bot_token, 
                                        self.telegram_chat_id, threshold)
@@ -1245,7 +1298,7 @@ class BotManager:
                 self.log("❌ Không thể tạo bot nào")
                 return False
         
-        # CÁC CHIẾN LƯỢC KHÁC - BỎ KIỂM TRA ĐÒN BẨY TRƯỚC
+        # CÁC CHIẾN LƯỢC KHÁC
         else:
             symbol = symbol.upper()
             bot_id = f"{symbol}_{strategy_type}"
@@ -1254,17 +1307,7 @@ class BotManager:
                 self.log(f"⚠️ Đã có bot {strategy_type} cho {symbol}")
                 return False
                 
-            if not self.api_key or not self.api_secret:
-                self.log("❌ Chưa cấu hình API Key và Secret Key!")
-                return False
-                
             try:
-                # BỎ KIỂM TRA ĐÒN BẨY TRƯỚC
-                price = get_current_price(symbol)
-                if price <= 0:
-                    self.log(f"❌ Không thể lấy giá cho {symbol}")
-                    return False
-                
                 # Tạo bot theo chiến lược
                 if strategy_type == "RSI/EMA Recursive":
                     bot = RSIEMABot(symbol, lev, percent, tp, sl, self.ws_manager, 
@@ -1321,13 +1364,16 @@ class BotManager:
                 active_bots = [bot_id for bot_id, bot in self.bots.items() if not bot._stop]
                 balance = get_balance(self.api_key, self.api_secret)
                 
-                status_msg = (
-                    f"📊 <b>BÁO CÁO HỆ THỐNG</b>\n"
-                    f"⏱ Thời gian hoạt động: {uptime_str}\n"
-                    f"🤖 Số bot đang chạy: {len(active_bots)}\n"
-                    f"📈 Bot hoạt động: {', '.join(active_bots) if active_bots else 'Không có'}\n"
-                    f"💰 Số dư khả dụng: {balance:.2f} USDT"
-                )
+                if balance is None:
+                    status_msg = "❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key!"
+                else:
+                    status_msg = (
+                        f"📊 <b>BÁO CÁO HỆ THỐNG</b>\n"
+                        f"⏱ Thời gian hoạt động: {uptime_str}\n"
+                        f"🤖 Số bot đang chạy: {len(active_bots)}\n"
+                        f"📈 Bot hoạt động: {', '.join(active_bots) if active_bots else 'Không có'}\n"
+                        f"💰 Số dư khả dụng: {balance:.2f} USDT"
+                    )
                 send_telegram(status_msg,
                             bot_token=self.telegram_bot_token,
                             default_chat_id=self.telegram_chat_id)
@@ -1490,20 +1536,10 @@ class BotManager:
                 
                 # Hiển thị thông tin khác nhau cho Reverse 24h
                 if user_state.get('strategy') == "Reverse 24h":
-                    # Kiểm tra trước có coin nào khả dụng không
-                    available_count = len(get_qualified_symbols(
-                        self.api_key, self.api_secret, 
-                        threshold=user_state.get('threshold', 30), 
-                        leverage=leverage,
-                        max_candidates=5,
-                        final_limit=3
-                    ))
-                    
                     send_telegram(
                         f"🎯 Chiến lược: {user_state['strategy']}\n"
                         f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
-                        f"💰 Đòn bẩy: {leverage}x\n"
-                        f"🔍 Dự kiến: {available_count} coin khả dụng\n\n"
+                        f"💰 Đòn bẩy: {leverage}x\n\n"
                         f"Nhập % số dư muốn sử dụng (1-100):",
                         chat_id,
                         create_cancel_keyboard(),
@@ -1691,6 +1727,13 @@ class BotManager:
         elif text == "➕ Thêm Bot":
             self.user_states[chat_id] = {'step': 'waiting_strategy'}
             
+            # Kiểm tra kết nối API trước
+            balance = get_balance(self.api_key, self.api_secret)
+            if balance is None:
+                send_telegram("❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key trước khi thêm bot!", chat_id,
+                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
+                return
+            
             # Hiển thị thông tin đặc biệt cho Reverse 24h
             volatile_coins = get_top_volatile_symbols(limit=3, threshold=20)
             volatile_info = "\n".join([f"🔸 {coin}" for coin in volatile_coins])
@@ -1742,8 +1785,12 @@ class BotManager:
         elif text == "💰 Số dư":
             try:
                 balance = get_balance(self.api_key, self.api_secret)
-                send_telegram(f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
+                if balance is None:
+                    send_telegram("❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key!", chat_id,
+                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
+                else:
+                    send_telegram(f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT", chat_id,
+                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
             except Exception as e:
                 send_telegram(f"⚠️ Lỗi lấy số dư: {str(e)}", chat_id,
                             bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1806,9 +1853,12 @@ class BotManager:
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
         
         elif text == "⚙️ Cấu hình":
+            balance = get_balance(self.api_key, self.api_secret)
+            api_status = "✅ Đã kết nối" if balance is not None else "❌ Lỗi kết nối"
+            
             config_info = (
                 "⚙️ <b>CẤU HÌNH HỆ THỐNG</b>\n\n"
-                f"🔑 API Key: {'✅ Đã cấu hình' if self.api_key else '❌ Chưa cấu hình'}\n"
+                f"🔑 Binance API: {api_status}\n"
                 f"🤖 Số bot: {len(self.bots)}\n"
                 f"📊 Chiến lược: {len(set(bot.strategy_name for bot in self.bots.values()))}\n"
                 f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối"
