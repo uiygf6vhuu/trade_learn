@@ -10,6 +10,12 @@ BINANCE_SECRET_KEY = os.getenv('BINANCE_SECRET_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
+# In ra để kiểm tra (không in secret key)
+print(f"BINANCE_API_KEY: {'***' if BINANCE_API_KEY else 'Không có'}")
+print(f"BINANCE_SECRET_KEY: {'***' if BINANCE_SECRET_KEY else 'Không có'}")
+print(f"TELEGRAM_BOT_TOKEN: {'***' if TELEGRAM_BOT_TOKEN else 'Không có'}")
+print(f"TELEGRAM_CHAT_ID: {TELEGRAM_CHAT_ID if TELEGRAM_CHAT_ID else 'Không có'}")
+
 # Cấu hình bot từ biến môi trường (dạng JSON)
 bot_config_json = os.getenv('BOT_CONFIGS', '[]')
 try:
@@ -64,3 +70,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
