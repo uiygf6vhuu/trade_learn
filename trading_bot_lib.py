@@ -1125,9 +1125,9 @@ class TrendFollowingBot(BaseBot):
                 return None
             
             # Logic theo xu hướng
-            if current_price > ema and rsi > 50:
+            if current_price > ema and rsi > 75:
                 return "BUY"
-            elif current_price < ema and rsi < 50:
+            elif current_price < ema and rsi < 25:
                 return "SELL"
             else:
                 return None
