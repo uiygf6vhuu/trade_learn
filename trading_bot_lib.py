@@ -41,10 +41,11 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
         logger.warning("Telegram Chat ID chưa được thiết lập")
         return
     
-    # LÀM SẠCH MESSAGE ĐỂ TRÁNH LỖI HTML PARSING
+    # CHỈ LÀM SẠCH KÝ TỰ ĐẶC BIỆT, GIỮ NGUYÊN THẺ HTML
     clean_message = message
     try:
-        clean_message = message.replace('<', '&lt;').replace('>', '&gt;')
+        # Chỉ thay thế các ký tự đặc biệt có thể gây lỗi HTML, giữ nguyên thẻ <b>, </b>
+        clean_message = message
     except:
         pass
     
@@ -127,13 +128,13 @@ def create_symbols_keyboard(strategy=None):
 def create_leverage_keyboard(strategy=None):
     """Bàn phím chọn đòn bẩy - có thể tùy chỉnh theo chiến lược"""
     if strategy == "Scalping":
-        leverages = ["3", "5", "10", "15", "20"]
+        leverages = ["3", "5", "10", "15", "20", "25", "50", "75", "100"]
     elif strategy == "Reverse 24h":
-        leverages = ["3", "5", "8", "10", "15"]
+        leverages = ["3", "5", "8", "10", "15", "25", "50", "75", "100"]
     elif strategy == "Safe Grid":
-        leverages = ["3", "5", "8", "10"]
+        leverages = ["3", "5", "8", "10", "25", "50", "75", "100"]
     else:
-        leverages = ["3", "5", "10", "15", "20", "25", "30"]
+        leverages = ["3", "5", "10", "15", "20", "25", "50", "75", "100"]
     
     keyboard = []
     row = []
@@ -148,6 +149,54 @@ def create_leverage_keyboard(strategy=None):
     
     return {
         "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_percent_keyboard():
+    """Bàn phím chọn % số dư với gợi ý"""
+    return {
+        "keyboard": [
+            [{"text": "1"}, {"text": "3"}, {"text": "5"}, {"text": "10"}],
+            [{"text": "15"}, {"text": "20"}, {"text": "25"}, {"text": "50"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_tp_keyboard():
+    """Bàn phím chọn Take Profit với gợi ý"""
+    return {
+        "keyboard": [
+            [{"text": "50"}, {"text": "100"}, {"text": "200"}],
+            [{"text": "300"}, {"text": "500"}, {"text": "1000"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_sl_keyboard():
+    """Bàn phím chọn Stop Loss với gợi ý"""
+    return {
+        "keyboard": [
+            [{"text": "0"}, {"text": "50"}, {"text": "100"}],
+            [{"text": "150"}, {"text": "200"}, {"text": "500"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_threshold_keyboard():
+    """Bàn phím chọn ngưỡng biến động cho Reverse 24h"""
+    return {
+        "keyboard": [
+            [{"text": "30"}, {"text": "50"}, {"text": "70"}],
+            [{"text": "100"}, {"text": "150"}, {"text": "200"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
         "resize_keyboard": True,
         "one_time_keyboard": True
     }
@@ -1117,7 +1166,7 @@ class Reverse24hBot(BaseBot):
         try:
             change_24h = get_24h_change(self.symbol)
             
-            # DEBUG CHI TIẾT
+            # DEBUG CHI TIẾT - SỬA LỖI HTML
             self.log(f"🔍 Kiểm tra tín hiệu - Biến động 24h: {change_24h:.2f}% | Ngưỡng: ±{self.threshold}%")
             
             # Logic đảo chiều: nếu tăng mạnh thì bán, giảm mạnh thì mua
@@ -1542,10 +1591,10 @@ class BotManager:
                     send_telegram(
                         f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
                         f"🤖 Bot sẽ tự động tìm coin đủ điều kiện:\n• Biến động cao\n• Đòn bẩy khả dụng\n\n"
-                        f"Nhập ngưỡng biến động (%):\n"
-                        f"(Ví dụ: 30 → tìm coin có biến động ≥30%)",
+                        f"Chọn ngưỡng biến động (%):\n"
+                        f"💡 <i>Gợi ý: 30, 50, 70 (càng cao càng ít coin)</i>",
                         chat_id,
-                        create_cancel_keyboard(),
+                        create_threshold_keyboard(),
                         self.telegram_bot_token, self.telegram_chat_id
                     )
                 else:
@@ -1576,7 +1625,8 @@ class BotManager:
                             f"🎯 <b>THIẾT LẬP REVERSE 24H</b>\n"
                             f"📊 Ngưỡng biến động: {threshold}%\n"
                             f"🔍 Sẽ tìm coin đạt ngưỡng và có đòn bẩy khả dụng\n\n"
-                            f"Chọn đòn bẩy:",
+                            f"Chọn đòn bẩy:\n"
+                            f"💡 <i>Gợi ý: 25x, 50x, 75x, 100x</i>",
                             chat_id,
                             create_leverage_keyboard(user_state.get('strategy')),
                             self.telegram_bot_token, self.telegram_chat_id
@@ -1600,7 +1650,8 @@ class BotManager:
                 send_telegram(
                     f"📌 <b>ĐÃ CHỌN: {symbol}</b>\n"
                     f"🎯 Chiến lược: {user_state['strategy']}\n\n"
-                    f"Chọn đòn bẩy:",
+                    f"Chọn đòn bẩy:\n"
+                    f"💡 <i>Gợi ý: 25x, 50x, 75x, 100x</i>",
                     chat_id,
                     create_leverage_keyboard(user_state.get('strategy')),
                     self.telegram_bot_token, self.telegram_chat_id
@@ -1622,9 +1673,10 @@ class BotManager:
                         f"🎯 Chiến lược: {user_state['strategy']}\n"
                         f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
                         f"💰 Đòn bẩy: {leverage}x\n\n"
-                        f"Nhập % số dư muốn sử dụng (1-100):",
+                        f"Nhập % số dư muốn sử dụng:\n"
+                        f"💡 <i>Gợi ý: 1%, 3%, 5%, 10%</i>",
                         chat_id,
-                        create_cancel_keyboard(),
+                        create_percent_keyboard(),
                         self.telegram_bot_token, self.telegram_chat_id
                     )
                 else:
@@ -1632,9 +1684,10 @@ class BotManager:
                         f"📌 Cặp: {user_state['symbol']}\n"
                         f"🎯 Chiến lược: {user_state['strategy']}\n"
                         f"💰 Đòn bẩy: {leverage}x\n\n"
-                        f"Nhập % số dư muốn sử dụng (1-100):",
+                        f"Nhập % số dư muốn sử dụng:\n"
+                        f"💡 <i>Gợi ý: 1%, 3%, 5%, 10%</i>",
                         chat_id,
-                        create_cancel_keyboard(),
+                        create_percent_keyboard(),
                         self.telegram_bot_token, self.telegram_chat_id
                     )
 
@@ -1656,9 +1709,10 @@ class BotManager:
                                 f"📊 Ngưỡng: {user_state.get('threshold', 30)}%\n"
                                 f"💰 ĐB: {user_state['leverage']}x\n"
                                 f"📊 %: {percent}%\n\n"
-                                f"Nhập % Take Profit (ví dụ: 10):",
+                                f"Nhập % Take Profit:\n"
+                                f"💡 <i>Gợi ý: 50%, 100%, 200%</i>",
                                 chat_id,
-                                create_cancel_keyboard(),
+                                create_tp_keyboard(),
                                 self.telegram_bot_token, self.telegram_chat_id
                             )
                         else:
@@ -1667,9 +1721,10 @@ class BotManager:
                                 f"🎯 Chiến lược: {user_state['strategy']}\n"
                                 f"💰 ĐB: {user_state['leverage']}x\n"
                                 f"📊 %: {percent}%\n\n"
-                                f"Nhập % Take Profit (ví dụ: 10):",
+                                f"Nhập % Take Profit:\n"
+                                f"💡 <i>Gợi ý: 50%, 100%, 200%</i>",
                                 chat_id,
-                                create_cancel_keyboard(),
+                                create_tp_keyboard(),
                                 self.telegram_bot_token, self.telegram_chat_id
                             )
                     else:
@@ -1698,9 +1753,10 @@ class BotManager:
                                 f"💰 ĐB: {user_state['leverage']}x\n"
                                 f"📊 %: {user_state['percent']}%\n"
                                 f"🎯 TP: {tp}%\n\n"
-                                f"Nhập % Stop Loss (ví dụ: 5, 0 để tắt SL):",
+                                f"Nhập % Stop Loss:\n"
+                                f"💡 <i>Gợi ý: 0 (tắt SL), 150%, 500%</i>",
                                 chat_id,
-                                create_cancel_keyboard(),
+                                create_sl_keyboard(),
                                 self.telegram_bot_token, self.telegram_chat_id
                             )
                         else:
@@ -1710,9 +1766,10 @@ class BotManager:
                                 f"💰 ĐB: {user_state['leverage']}x\n"
                                 f"📊 %: {user_state['percent']}%\n"
                                 f"🎯 TP: {tp}%\n\n"
-                                f"Nhập % Stop Loss (ví dụ: 5, 0 để tắt SL):",
+                                f"Nhập % Stop Loss:\n"
+                                f"💡 <i>Gợi ý: 0 (tắt SL), 150%, 500%</i>",
                                 chat_id,
-                                create_cancel_keyboard(),
+                                create_sl_keyboard(),
                                 self.telegram_bot_token, self.telegram_chat_id
                             )
                     else:
