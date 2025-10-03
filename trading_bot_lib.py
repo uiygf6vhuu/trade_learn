@@ -641,7 +641,7 @@ class BaseBot:
         self.last_position_check = 0
         self.last_error_log_time = 0
         self.last_close_time = 0
-        self.cooldown_period = 9000
+        self.cooldown_period = 900
         self.max_position_attempts = 3
         self.position_attempt_count = 0
         
@@ -675,7 +675,7 @@ class BaseBot:
             'last_position_check': 0,
             'last_error_log_time': 0,
             'last_close_time': 0,
-            'cooldown_period': 9000,
+            'cooldown_period': 900,
             'max_position_attempts': 3,
             'position_attempt_count': 0
         }
@@ -833,8 +833,8 @@ class BaseBot:
             
             if self.percent > 100:
                 self.percent = 100
-            elif self.percent < 1:
-                self.percent = 1
+            elif self.percent <= 0:
+                self.percent = 0.1
                 
             usdt_amount = balance * (self.percent / 100)
             price = get_current_price(self.symbol)
@@ -873,7 +873,7 @@ class BaseBot:
                 return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty <= 0:
+            if executed_qty < 0:
                 self.log(f"❌ Lệnh không khớp, số lượng thực thi: {executed_qty}")
                 return
 
