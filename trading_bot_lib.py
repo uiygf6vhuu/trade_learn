@@ -579,7 +579,7 @@ class BaseBot:
         self.cooldown_period = 9000
         self.max_position_attempts = 3
         self.position_attempt_count = 0
-        
+        self.last_signal_check = None
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
         
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -849,6 +849,7 @@ class RSIEMABot(BaseBot):
         self.rsi_history = []
         self.ema_fast = None
         self.ema_slow = None
+        self.last_signal_check = None
 
     def _fetch_klines(self, interval="5m", limit=50):
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={self.symbol}&interval={interval}&limit={limit}"
@@ -1001,6 +1002,7 @@ class EMACrossoverBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "EMA Crossover")
         self.ema_fast_period = 9
         self.ema_slow_period = 21
+        self.last_signal_check = None
 
     def get_ema_crossover_signal(self):
         if len(self.prices) < self.ema_slow_period:
@@ -1034,6 +1036,7 @@ class Reverse24hBot(BaseBot):
         self.threshold = threshold
         self.last_signal_check = 0
         self.signal_check_interval = 300  # 5 phút
+        self.last_signal_check = None
 
     def get_signal(self):
         current_time = time.time()
@@ -1100,6 +1103,7 @@ class TrendFollowingBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Trend Following")
         self.ema_period = 20
         self.rsi_period = 14
+        self.last_signal_check = None
 
     def get_signal(self):
         if len(self.prices) < self.ema_period + self.rsi_period:
@@ -1135,6 +1139,7 @@ class ScalpingBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
         self.last_scalp_time = 0
         self.scalp_cooldown = 300  # 5 phút
+        self.last_signal_check = None
 
     def get_signal(self):
         current_time = time.time()
@@ -1170,6 +1175,7 @@ class SafeGridBot(BaseBot):
         self.grid_levels = 5
         self.grid_spacing = 0.02  # 2%
         self.orders_placed = 0
+        self.last_signal_check = None
 
     def get_signal(self):
         # Logic grid đơn giản
