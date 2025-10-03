@@ -41,10 +41,13 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
         logger.warning("Telegram Chat ID chưa được thiết lập")
         return
     
+    # LÀM SẠCH MESSAGE ĐỂ TRÁNH LỖI HTML PARSING
+    clean_message = message.replace('<', '&lt;').replace('>', '&gt;')
+    
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": message,
+        "text": clean_message,  # SỬ DỤNG MESSAGE ĐÃ LÀM SẠCH
         "parse_mode": "HTML"
     }
     
@@ -1141,11 +1144,16 @@ class ScalpingBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
-        self.last_scalp_time = 0
+        self.last_scalp_time = 0  # THÊM DÒNG NÀY
         self.scalp_cooldown = 300  # 5 phút
 
     def get_signal(self):
         current_time = time.time()
+        
+        # THÊM KIỂM TRA NULL CHO last_scalp_time
+        if not hasattr(self, 'last_scalp_time'):
+            self.last_scalp_time = 0
+            
         if current_time - self.last_scalp_time < self.scalp_cooldown:
             return None
             
