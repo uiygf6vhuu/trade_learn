@@ -42,12 +42,16 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
         return
     
     # LÀM SẠCH MESSAGE ĐỂ TRÁNH LỖI HTML PARSING
-    clean_message = message.replace('<', '&lt;').replace('>', '&gt;')
+    clean_message = message
+    try:
+        clean_message = message.replace('<', '&lt;').replace('>', '&gt;')
+    except:
+        pass
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": clean_message,  # SỬ DỤNG MESSAGE ĐÃ LÀM SẠCH
+        "text": clean_message,
         "parse_mode": "HTML"
     }
     
@@ -592,11 +596,44 @@ class BaseBot:
         self.max_position_attempts = 3
         self.position_attempt_count = 0
         
+        # ĐẢM BẢO KHÔNG CÓ LỖI THIẾU THUỘC TÍNH
+        self._ensure_required_attributes()
+        
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
         
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         self.log(f"🟢 Bot {strategy_name} khởi động cho {self.symbol}")
+
+    def _ensure_required_attributes(self):
+        """Đảm bảo tất cả thuộc tính quan trọng đều được khởi tạo"""
+        required_attrs = {
+            'last_signal_check': 0,
+            'last_price': 0,
+            'previous_price': 0,
+            'price_change_24h': 0,
+            'price_history': [],
+            'max_history_size': 100,
+            'status': "waiting",
+            'side': "",
+            'qty': 0,
+            'entry': 0,
+            'prices': [],
+            '_stop': False,
+            'position_open': False,
+            'last_trade_time': 0,
+            'position_check_interval': 60,
+            'last_position_check': 0,
+            'last_error_log_time': 0,
+            'last_close_time': 0,
+            'cooldown_period': 9000,
+            'max_position_attempts': 3,
+            'position_attempt_count': 0
+        }
+        
+        for attr, default_value in required_attrs.items():
+            if not hasattr(self, attr):
+                setattr(self, attr, default_value)
 
     def log(self, message):
         logger.info(f"[{self.symbol} - {self.strategy_name}] {message}")
@@ -865,6 +902,7 @@ class RSIEMABot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "RSI/EMA Recursive")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
         self.rsi_history = []
         self.ema_fast = None
         self.ema_slow = None
@@ -1018,10 +1056,17 @@ class EMACrossoverBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "EMA Crossover")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
         self.ema_fast_period = 9
         self.ema_slow_period = 21
 
     def get_ema_crossover_signal(self):
+        # KIỂM TRA AN TOÀN CHO TẤT CẢ THUỘC TÍNH
+        if not hasattr(self, 'ema_fast_period'):
+            self.ema_fast_period = 9
+        if not hasattr(self, 'ema_slow_period'):
+            self.ema_slow_period = 21
+            
         if len(self.prices) < self.ema_slow_period:
             return None
     
@@ -1050,15 +1095,19 @@ class Reverse24hBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
         self.threshold = threshold
         self.signal_check_interval = 300  # 5 phút
+        self.last_signal_check = 0
 
     def get_signal(self):
         current_time = time.time()
         
-        # KIỂM TRA THỜI GIAN - TRÁNH LỖI None
-        if self.last_signal_check is None:
+        # KIỂM TRA AN TOÀN CHO TẤT CẢ THUỘC TÍNH
+        if not hasattr(self, 'last_signal_check'):
             self.last_signal_check = 0
+        if not hasattr(self, 'signal_check_interval'):
+            self.signal_check_interval = 300
             
         if current_time - self.last_signal_check < self.signal_check_interval:
             return None
@@ -1109,10 +1158,17 @@ class TrendFollowingBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Trend Following")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
         self.ema_period = 20
         self.rsi_period = 14
 
     def get_signal(self):
+        # KIỂM TRA AN TOÀN CHO TẤT CẢ THUỘC TÍNH
+        if not hasattr(self, 'ema_period'):
+            self.ema_period = 20
+        if not hasattr(self, 'rsi_period'):
+            self.rsi_period = 14
+            
         if len(self.prices) < self.ema_period + self.rsi_period:
             return None
             
@@ -1144,16 +1200,18 @@ class ScalpingBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
-        self.last_scalp_time = 0  # THÊM DÒNG NÀY
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
+        self.last_scalp_time = 0
         self.scalp_cooldown = 300  # 5 phút
 
     def get_signal(self):
-        current_time = time.time()
-        
-        # THÊM KIỂM TRA NULL CHO last_scalp_time
+        # KIỂM TRA AN TOÀN CHO TẤT CẢ THUỘC TÍNH
         if not hasattr(self, 'last_scalp_time'):
             self.last_scalp_time = 0
+        if not hasattr(self, 'scalp_cooldown'):
+            self.scalp_cooldown = 300
             
+        current_time = time.time()
         if current_time - self.last_scalp_time < self.scalp_cooldown:
             return None
             
@@ -1183,11 +1241,18 @@ class SafeGridBot(BaseBot):
     
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Safe Grid")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
         self.grid_levels = 5
         self.grid_spacing = 0.02  # 2%
         self.orders_placed = 0
 
     def get_signal(self):
+        # KIỂM TRA AN TOÀN CHO TẤT CẢ THUỘC TÍNH
+        if not hasattr(self, 'grid_levels'):
+            self.grid_levels = 5
+        if not hasattr(self, 'orders_placed'):
+            self.orders_placed = 0
+            
         # Logic grid đơn giản
         if self.orders_placed < self.grid_levels:
             self.orders_placed += 1
