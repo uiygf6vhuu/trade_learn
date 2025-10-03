@@ -5,8 +5,8 @@ import json
 import time
 
 # Lấy cấu hình từ biến môi trường
-BINANCE_API_KEY = "HKf1G6IHTVKP6DHf0RJouI18YBfdPRZl4BnjIdagX3xjy4Sv8S7ei52YmdDOpd5o"
-BINANCE_SECRET_KEY = "sPXp9ENbqiiIOnHdb2yWQyXL0sP9SlmMGtGcVaBjr1fmdd0piITLipT11rqUhetc"
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
+BINANCE_SECRET_KEY = os.getenv('BINANCE_SECRET_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
@@ -70,5 +70,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
