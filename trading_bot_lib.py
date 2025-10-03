@@ -12,6 +12,7 @@ import logging
 import requests
 import os
 import math
+import traceback
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -562,6 +563,14 @@ class BaseBot:
         self.telegram_chat_id = telegram_chat_id
         self.strategy_name = strategy_name
         
+        # KHỞI TẠO TẤT CẢ BIẾN QUAN TRỌNG ĐỂ TRÁNH LỖI None
+        self.last_signal_check = 0
+        self.last_price = 0
+        self.previous_price = 0
+        self.price_change_24h = 0
+        self.price_history = []
+        self.max_history_size = 100
+        
         self.check_position_status()
         self.status = "waiting"
         self.side = ""
@@ -579,7 +588,7 @@ class BaseBot:
         self.cooldown_period = 9000
         self.max_position_attempts = 3
         self.position_attempt_count = 0
-        self.last_signal_check = None
+        
         self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
         
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -596,9 +605,13 @@ class BaseBot:
         if self._stop: 
             return
             
-        self.prices.append(price)
-        if len(self.prices) > 100:
-            self.prices = self.prices[-100:]
+        try:
+            if price and price > 0:
+                self.prices.append(float(price))
+                if len(self.prices) > 100:
+                    self.prices = self.prices[-100:]
+        except Exception as e:
+            self.log(f"❌ Lỗi xử lý giá: {str(e)}")
 
     def get_signal(self):
         """Phương thức trừu tượng - cần được override bởi các lớp con"""
@@ -631,7 +644,8 @@ class BaseBot:
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
-                    self.log(f"Lỗi hệ thống: {str(e)}")
+                    error_msg = f"❌ Lỗi hệ thống: {str(e)}\n{traceback.format_exc()}"
+                    self.log(error_msg)
                     self.last_error_log_time = time.time()
                 time.sleep(1)
 
@@ -642,7 +656,7 @@ class BaseBot:
             cancel_all_orders(self.symbol, self.api_key, self.api_secret)
         except Exception as e:
             if time.time() - self.last_error_log_time > 10:
-                self.log(f"Lỗi hủy lệnh: {str(e)}")
+                self.log(f"❌ Lỗi hủy lệnh: {str(e)}")
                 self.last_error_log_time = time.time()
         self.log(f"🔴 Bot dừng cho {self.symbol}")
 
@@ -673,7 +687,7 @@ class BaseBot:
             
         except Exception as e:
             if time.time() - self.last_error_log_time > 10:
-                self.log(f"Lỗi kiểm tra vị thế: {str(e)}")
+                self.log(f"❌ Lỗi kiểm tra vị thế: {str(e)}")
                 self.last_error_log_time = time.time()
 
     def check_tp_sl(self):
@@ -707,7 +721,7 @@ class BaseBot:
                 
         except Exception as e:
             if time.time() - self.last_error_log_time > 10:
-                self.log(f"Lỗi kiểm tra TP/SL: {str(e)}")
+                self.log(f"❌ Lỗi kiểm tra TP/SL: {str(e)}")
                 self.last_error_log_time = time.time()
 
     def open_position(self, side):
@@ -716,7 +730,7 @@ class BaseBot:
             cancel_all_orders(self.symbol, self.api_key, self.api_secret)
             
             if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
-                self.log(f"Không thể đặt đòn bẩy {self.lev}")
+                self.log(f"❌ Không thể đặt đòn bẩy {self.lev}")
                 return
             
             balance = get_balance(self.api_key, self.api_secret)
@@ -725,7 +739,7 @@ class BaseBot:
                 return
                 
             if balance <= 0:
-                self.log(f"Không đủ số dư USDT")
+                self.log(f"❌ Không đủ số dư USDT")
                 return
             
             if self.percent > 100:
@@ -736,7 +750,7 @@ class BaseBot:
             usdt_amount = balance * (self.percent / 100)
             price = get_current_price(self.symbol)
             if price <= 0:
-                self.log(f"Lỗi lấy giá")
+                self.log(f"❌ Lỗi lấy giá")
                 return
                 
             step = get_step_size(self.symbol, self.api_key, self.api_secret)
@@ -766,12 +780,12 @@ class BaseBot:
                 
             res = place_order(self.symbol, side, qty, self.api_key, self.api_secret)
             if not res:
-                self.log(f"Lỗi khi đặt lệnh")
+                self.log(f"❌ Lỗi khi đặt lệnh")
                 return
                 
             executed_qty = float(res.get('executedQty', 0))
-            if executed_qty < 0:
-                self.log(f"Lệnh không khớp, số lượng thực thi: {executed_qty}")
+            if executed_qty <= 0:
+                self.log(f"❌ Lệnh không khớp, số lượng thực thi: {executed_qty}")
                 return
 
             self.entry = float(res.get('avgPrice', price))
@@ -795,7 +809,8 @@ class BaseBot:
 
         except Exception as e:
             self.position_open = False
-            self.log(f"❌ Lỗi khi vào lệnh: {str(e)}")
+            error_msg = f"❌ Lỗi khi vào lệnh: {str(e)}\n{traceback.format_exc()}"
+            self.log(error_msg)
 
     def close_position(self, reason=""):
         try:
@@ -834,9 +849,10 @@ class BaseBot:
                     self.last_trade_time = time.time()
                     self.last_close_time = time.time()
                 else:
-                    self.log(f"Lỗi khi đóng lệnh")
+                    self.log(f"❌ Lỗi khi đóng lệnh")
         except Exception as e:
-            self.log(f"❌ Lỗi khi đóng lệnh: {str(e)}")
+            error_msg = f"❌ Lỗi khi đóng lệnh: {str(e)}\n{traceback.format_exc()}"
+            self.log(error_msg)
 
 
 # ========== CÁC CHIẾN LƯỢC BOT KHÁC NHAU ==========
@@ -849,7 +865,6 @@ class RSIEMABot(BaseBot):
         self.rsi_history = []
         self.ema_fast = None
         self.ema_slow = None
-        self.last_signal_check = None
 
     def _fetch_klines(self, interval="5m", limit=50):
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={self.symbol}&interval={interval}&limit={limit}"
@@ -992,7 +1007,7 @@ class RSIEMABot(BaseBot):
             return decision
 
         except Exception as e:
-            self.log(f"Lỗi tín hiệu RSI/EMA: {str(e)}")
+            self.log(f"❌ Lỗi tín hiệu RSI/EMA: {str(e)}")
             return None
 
 class EMACrossoverBot(BaseBot):
@@ -1002,7 +1017,6 @@ class EMACrossoverBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "EMA Crossover")
         self.ema_fast_period = 9
         self.ema_slow_period = 21
-        self.last_signal_check = None
 
     def get_ema_crossover_signal(self):
         if len(self.prices) < self.ema_slow_period:
@@ -1034,12 +1048,15 @@ class Reverse24hBot(BaseBot):
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
         self.threshold = threshold
-        self.last_signal_check = 0
         self.signal_check_interval = 300  # 5 phút
-        self.last_signal_check = None
 
     def get_signal(self):
         current_time = time.time()
+        
+        # KIỂM TRA THỜI GIAN - TRÁNH LỖI None
+        if self.last_signal_check is None:
+            self.last_signal_check = 0
+            
         if current_time - self.last_signal_check < self.signal_check_interval:
             return None
             
@@ -1047,6 +1064,9 @@ class Reverse24hBot(BaseBot):
         
         try:
             change_24h = get_24h_change(self.symbol)
+            
+            # DEBUG CHI TIẾT
+            self.log(f"🔍 Kiểm tra tín hiệu - Biến động 24h: {change_24h:.2f}% | Ngưỡng: ±{self.threshold}%")
             
             # Logic đảo chiều: nếu tăng mạnh thì bán, giảm mạnh thì mua
             if abs(change_24h) >= self.threshold:
@@ -1073,28 +1093,13 @@ class Reverse24hBot(BaseBot):
                     self.log(signal_info)
                     return "BUY"
             
+            self.log(f"➖ Không có tín hiệu - Biến động: {change_24h:.2f}% (chưa đạt ngưỡng ±{self.threshold}%)")
             return None
             
         except Exception as e:
-            self.log(f"Lỗi tín hiệu Reverse 24h: {str(e)}")
+            error_msg = f"❌ Lỗi tín hiệu Reverse 24h: {str(e)}\n{traceback.format_exc()}"
+            self.log(error_msg)
             return None
-
-    def open_position(self, side):
-        """Ghi đè phương thức mở position để thêm thông tin Reverse 24h"""
-        change_24h = get_24h_change(self.symbol)
-        analysis_msg = (
-            f"📊 <b>PHÂN TÍCH REVERSE 24H</b>\n"
-            f"🎯 Chiến lược: Đảo chiều biến động\n"
-            f"📈 Biến động 24h: {change_24h:+.2f}%\n"
-            f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
-            f"💰 Đòn bẩy: {self.lev}x (Đã xác nhận)\n"
-            f"📊 % vốn: {self.percent}%\n"
-            f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%"
-        )
-        self.log(analysis_msg)
-        
-        # Gọi phương thức gốc
-        super().open_position(side)
 
 class TrendFollowingBot(BaseBot):
     """Bot theo xu hướng sử dụng EMA và RSI"""
@@ -1103,7 +1108,6 @@ class TrendFollowingBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Trend Following")
         self.ema_period = 20
         self.rsi_period = 14
-        self.last_signal_check = None
 
     def get_signal(self):
         if len(self.prices) < self.ema_period + self.rsi_period:
@@ -1129,7 +1133,7 @@ class TrendFollowingBot(BaseBot):
                 return None
                 
         except Exception as e:
-            self.log(f"Lỗi tín hiệu Trend Following: {str(e)}")
+            self.log(f"❌ Lỗi tín hiệu Trend Following: {str(e)}")
             return None
 
 class ScalpingBot(BaseBot):
@@ -1139,7 +1143,6 @@ class ScalpingBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
         self.last_scalp_time = 0
         self.scalp_cooldown = 300  # 5 phút
-        self.last_signal_check = None
 
     def get_signal(self):
         current_time = time.time()
@@ -1164,7 +1167,7 @@ class ScalpingBot(BaseBot):
                     
             return None
         except Exception as e:
-            self.log(f"Lỗi tín hiệu Scalping: {str(e)}")
+            self.log(f"❌ Lỗi tín hiệu Scalping: {str(e)}")
             return None
 
 class SafeGridBot(BaseBot):
@@ -1175,7 +1178,6 @@ class SafeGridBot(BaseBot):
         self.grid_levels = 5
         self.grid_spacing = 0.02  # 2%
         self.orders_placed = 0
-        self.last_signal_check = None
 
     def get_signal(self):
         # Logic grid đơn giản
@@ -1221,7 +1223,7 @@ class BotManager:
             self.log("1. API Key và Secret Key có đúng không?")
             self.log("2. API Key có quyền Futures không?")
             self.log("3. IP có được whitelist không?")
-            self.log("4. Thời gian server có đồng bộ không?")
+            self.log("4. Thời gian server có đồbộ không?")
         else:
             self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")
 
@@ -1339,7 +1341,8 @@ class BotManager:
                 return True
                 
             except Exception as e:
-                self.log(f"❌ Lỗi tạo bot {symbol}: {str(e)}")
+                error_msg = f"❌ Lỗi tạo bot {symbol}: {str(e)}\n{traceback.format_exc()}"
+                self.log(error_msg)
                 return False
 
     def stop_bot(self, bot_id):
