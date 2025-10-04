@@ -1,4 +1,4 @@
-# trading_bot_lib.py
+# trading_bot_lib_fixed.py
 import json
 import hmac
 import hashlib
@@ -91,14 +91,10 @@ def create_strategy_keyboard():
     }
 
 def create_symbols_keyboard(strategy=None):
-    if strategy == "Reverse 24h":
-        volatile_symbols = get_top_volatile_symbols(limit=8, threshold=20)
-    else:
-        volatile_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
-    
+    symbols = get_all_usdt_pairs(limit=20)
     keyboard = []
     row = []
-    for symbol in volatile_symbols:
+    for symbol in symbols:
         row.append({"text": symbol})
         if len(row) == 3:
             keyboard.append(row)
@@ -254,37 +250,29 @@ class CoinManager:
         with self._lock:
             return self.position_coins.copy()
 
-# ========== HÀM TÌM COIN ==========
-def get_top_volatile_symbols(limit=10, threshold=20):
+# ========== HÀM TÌM COIN TOÀN BINANCE ==========
+def get_all_usdt_pairs(limit=100):
+    """Lấy tất cả cặp USDT từ Binance Futures"""
     try:
-        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
-            return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT"]
+            return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT"]
         
-        volatile_pairs = []
-        for ticker in data:
-            symbol = ticker.get('symbol', '')
-            if symbol.endswith('USDT'):
-                change = float(ticker.get('priceChangePercent', 0))
-                if abs(change) >= threshold:
-                    volatile_pairs.append((symbol, abs(change)))
+        usdt_pairs = []
+        for symbol_info in data.get('symbols', []):
+            symbol = symbol_info.get('symbol', '')
+            if symbol.endswith('USDT') and symbol_info.get('status') == 'TRADING':
+                usdt_pairs.append(symbol)
         
-        volatile_pairs.sort(key=lambda x: x[1], reverse=True)
-        top_symbols = [pair[0] for pair in volatile_pairs[:limit]]
-        
-        default_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT"]
-        for symbol in default_symbols:
-            if len(top_symbols) < limit and symbol not in top_symbols:
-                top_symbols.append(symbol)
-        
-        return top_symbols[:limit]
+        return usdt_pairs[:limit] if limit else usdt_pairs
         
     except Exception as e:
-        logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
+        logger.error(f"Lỗi lấy danh sách coin: {str(e)}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
 
-def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshold=None, volatility=None, grid_levels=None, max_candidates=8, final_limit=2):
+def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshold=None, volatility=None, grid_levels=None, max_candidates=20, final_limit=2):
+    """Tìm coin phù hợp trên toàn bộ Binance"""
     try:
         test_balance = get_balance(api_key, api_secret)
         if test_balance is None:
@@ -293,7 +281,6 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
         
         coin_manager = CoinManager()
         managed_coins = coin_manager.get_managed_coins()
-        position_coins = coin_manager.get_position_coins()
         
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
@@ -305,9 +292,11 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
         for ticker in data:
             symbol = ticker.get('symbol', '')
             if symbol.endswith('USDT'):
+                # Bỏ qua BTC, ETH để tránh rủi ro cao
                 if symbol in ['BTCUSDT', 'ETHUSDT']:
                     continue
                 
+                # Bỏ qua coin đã có bot quản lý
                 if symbol in managed_coins:
                     continue
                 
@@ -317,16 +306,18 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 low_price = float(ticker.get('lowPrice', 0))
                 price_range = ((high_price - low_price) / low_price) * 100 if low_price > 0 else 0
                 
+                # TIÊU CHÍ CHO TỪNG CHIẾN LƯỢC
                 if strategy_type == "Reverse 24h":
-                    if price_change >= threshold and volume > 5000000:
+                    if price_change >= (threshold or 30) and volume > 5000000:
                         qualified_symbols.append((symbol, price_change))
                 elif strategy_type == "Scalping":
-                    if price_change >= volatility and volume > 10000000 and price_range >= 2.0:
+                    if price_change >= (volatility or 3) and volume > 10000000 and price_range >= 2.0:
                         qualified_symbols.append((symbol, price_range))
                 elif strategy_type == "Safe Grid":
                     if 1.0 <= price_change <= 5.0 and volume > 2000000 and price_range <= 3.0:
                         qualified_symbols.append((symbol, -abs(price_change - 3.0)))
         
+        # SẮP XẾP THEO ĐIỂM PHÙ HỢP
         if strategy_type == "Reverse 24h":
             qualified_symbols.sort(key=lambda x: x[1], reverse=True)
         elif strategy_type == "Scalping":
@@ -334,34 +325,38 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
         elif strategy_type == "Safe Grid":
             qualified_symbols.sort(key=lambda x: x[1], reverse=True)
         
-        for symbol in position_coins:
-            if symbol not in managed_coins and len(qualified_symbols) < final_limit:
-                qualified_symbols.insert(0, (symbol, 999))
-        
+        # CHỌN COIN TỐT NHẤT
         final_symbols = []
         for symbol, score in qualified_symbols[:max_candidates]:
             if len(final_symbols) >= final_limit:
                 break
             try:
+                # KIỂM TRA ĐÒN BẨY VÀ LOT SIZE
                 leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
-                if leverage_success:
+                step_size = get_step_size(symbol, api_key, api_secret)
+                
+                if leverage_success and step_size > 0:
                     final_symbols.append(symbol)
-                    logger.info(f"✅ {symbol}: phù hợp {strategy_type}")
+                    logger.info(f"✅ {symbol}: phù hợp {strategy_type} (Score: {score:.2f})")
                 time.sleep(0.1)
-            except:
+            except Exception as e:
+                logger.error(f"❌ Lỗi kiểm tra {symbol}: {str(e)}")
                 continue
         
+        # FALLBACK NẾU KHÔNG TÌM ĐỦ COIN
         backup_symbols = ["ADAUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "ATOMUSDT", "AVAXUSDT", "SOLUSDT", "BNBUSDT"]
         for symbol in backup_symbols:
             if len(final_symbols) < final_limit and symbol not in final_symbols and symbol not in managed_coins:
                 try:
                     leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
-                    if leverage_success:
+                    step_size = get_step_size(symbol, api_key, api_secret)
+                    if leverage_success and step_size > 0:
                         final_symbols.append(symbol)
+                        logger.info(f"✅ {symbol}: fallback cho {strategy_type}")
                 except:
                     continue
         
-        logger.info(f"🎯 {strategy_type}: {len(final_symbols)} coin")
+        logger.info(f"🎯 {strategy_type}: tìm thấy {len(final_symbols)} coin phù hợp")
         return final_symbols[:final_limit]
         
     except Exception as e:
@@ -432,6 +427,21 @@ def get_step_size(symbol, api_key, api_secret):
     except Exception as e:
         logger.error(f"Lỗi lấy step size: {str(e)}")
     return 0.001
+
+def get_min_notional(symbol, api_key, api_secret):
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    try:
+        data = binance_api_request(url)
+        if not data:
+            return 5.0
+        for s in data['symbols']:
+            if s['symbol'] == symbol.upper():
+                for f in s['filters']:
+                    if f['filterType'] == 'MIN_NOTIONAL':
+                        return float(f.get('notional', 5.0))
+    except Exception as e:
+        logger.error(f"Lỗi lấy min notional: {str(e)}")
+    return 5.0
 
 def set_leverage(symbol, lev, api_key, api_secret):
     try:
@@ -549,10 +559,13 @@ def get_24h_change(symbol):
         url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol.upper()}"
         data = binance_api_request(url)
         if data and 'priceChangePercent' in data:
-            return float(data['priceChangePercent'])
+            change = data['priceChangePercent']
+            # ĐẢM BẢO KHÔNG BAO GIỜ TRẢ VỀ None
+            return float(change) if change is not None else 0.0
+        return 0.0
     except Exception as e:
         logger.error(f"Lỗi lấy biến động 24h cho {symbol}: {str(e)}")
-    return 0
+    return 0.0
 
 # ========== CHỈ BÁO KỸ THUẬT ==========
 def calc_rsi(prices, period=14):
@@ -567,9 +580,13 @@ def calc_rsi(prices, period=14):
         if avg_loss == 0:
             return 100.0
         rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1 + rs))
+        rsi_value = 100.0 - (100.0 / (1 + rs))
+        
+        # KIỂM TRA GIÁ TRỊ HỢP LỆ
+        if np.isnan(rsi_value) or np.isinf(rsi_value):
+            return None
+        return rsi_value
     except Exception as e:
-        logger.error(f"Lỗi tính RSI: {str(e)}")
         return None
 
 def calc_ema(prices, period):
@@ -580,9 +597,13 @@ def calc_ema(prices, period):
         weights = np.exp(np.linspace(-1., 0., period))
         weights /= weights.sum()
         ema = np.convolve(prices, weights, mode='valid')
-        return float(ema[-1])
+        ema_value = float(ema[-1])
+        
+        # KIỂM TRA GIÁ TRỊ HỢP LỆ
+        if np.isnan(ema_value) or np.isinf(ema_value):
+            return None
+        return ema_value
     except Exception as e:
-        logger.error(f"Lỗi tính EMA: {str(e)}")
         return None
 
 # ========== WEBSOCKET MANAGER ==========
@@ -836,18 +857,18 @@ class BaseBot:
                 return False
 
             step_size = get_step_size(self.symbol, self.api_key, self.api_secret)
+            min_notional = get_min_notional(self.symbol, self.api_key, self.api_secret)
             usd_amount = balance * (self.percent / 100)
             qty = (usd_amount * self.lev) / current_price
             
             # LÀM TRÒN SỐ LƯỢNG THEO STEP SIZE
             if step_size > 0:
                 qty = math.floor(qty / step_size) * step_size
-            else:
-                qty = round(qty, 8)  # Fallback làm tròn 8 chữ số thập phân
+                qty = round(qty, 8)  # ĐẢM BẢO LÀM TRÒN ĐÚNG
 
-            # KIỂM TRA SỐ LƯỢNG TỐI THIỂU
-            if qty <= 0:
-                self.log("❌ Số lượng quá nhỏ")
+            # KIỂM TRA SỐ LƯỢNG TỐI THIỂU VÀ NOTIONAL
+            if qty <= step_size or (qty * current_price) < min_notional:
+                self.log(f"❌ Số lượng quá nhỏ: {qty} (Min: {step_size}, Notional: {qty * current_price:.2f} < {min_notional})")
                 return False
 
             # ĐẶT LỆNH
@@ -886,8 +907,6 @@ class BaseBot:
                 
         except Exception as e:
             self.log(f"❌ Lỗi mở lệnh: {str(e)}")
-            import traceback
-            self.log(f"❌ Chi tiết lỗi: {traceback.format_exc()}")
             return False
 
     def close_position(self, reason=""):
@@ -975,6 +994,7 @@ class RSI_EMA_Bot(BaseBot):
             ema_fast = calc_ema(self.prices, self.ema_fast)
             ema_slow = calc_ema(self.prices, self.ema_slow)
 
+            # KIỂM TRA None TRƯỚC KHI SO SÁNH
             if rsi is None or ema_fast is None or ema_slow is None:
                 return None
 
@@ -987,7 +1007,6 @@ class RSI_EMA_Bot(BaseBot):
             return signal
 
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu RSI/EMA: {str(e)}")
             return None
 
 class EMA_Crossover_Bot(BaseBot):
@@ -1006,6 +1025,7 @@ class EMA_Crossover_Bot(BaseBot):
             ema_fast = calc_ema(self.prices, self.ema_fast)
             ema_slow = calc_ema(self.prices, self.ema_slow)
 
+            # KIỂM TRA None TRƯỚC KHI SO SÁNH
             if ema_fast is None or ema_slow is None:
                 return None
 
@@ -1022,7 +1042,6 @@ class EMA_Crossover_Bot(BaseBot):
             return signal
 
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu EMA Crossover: {str(e)}")
             return None
 
 class Reverse_24h_Bot(BaseBot):
@@ -1040,6 +1059,9 @@ class Reverse_24h_Bot(BaseBot):
             change_24h = get_24h_change(self.symbol)
             self.last_24h_check = current_time
 
+            # ĐẢM BẢO change_24h LUÔN LÀ SỐ
+            change_24h = change_24h if change_24h is not None else 0
+
             signal = None
             if change_24h >= self.threshold:
                 signal = "SELL"
@@ -1051,7 +1073,6 @@ class Reverse_24h_Bot(BaseBot):
             return signal
 
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu Reverse 24h: {str(e)}")
             return None
 
 class Trend_Following_Bot(BaseBot):
@@ -1077,7 +1098,6 @@ class Trend_Following_Bot(BaseBot):
             return signal
 
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu Trend Following: {str(e)}")
             return None
 
 class Scalping_Bot(BaseBot):
@@ -1098,24 +1118,25 @@ class Scalping_Bot(BaseBot):
 
             rsi = calc_rsi(self.prices, self.rsi_period)
 
+            # KIỂM TRA None TRƯỚC KHI SO SÁNH
+            if rsi is None:
+                return None
+
             signal = None
-            if rsi is not None:
-                if rsi < 25 and price_change < -self.min_movement:
-                    signal = "BUY"
-                elif rsi > 75 and price_change > self.min_movement:
-                    signal = "SELL"
+            if rsi < 25 and price_change < -self.min_movement:
+                signal = "BUY"
+            elif rsi > 75 and price_change > self.min_movement:
+                signal = "SELL"
 
             return signal
 
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu Scalping: {str(e)}")
             return None
 
 class Safe_Grid_Bot(BaseBot):
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, grid_levels=5):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Safe Grid")
         self.grid_levels = grid_levels
-        self.grid_spacing = 0.02
         self.orders_placed = 0
 
     def get_signal(self):
@@ -1128,7 +1149,6 @@ class Safe_Grid_Bot(BaseBot):
                     return "SELL"
             return None
         except Exception as e:
-            self.log(f"❌ Lỗi tính tín hiệu Safe Grid: {str(e)}")
             return None
 
 # ========== BOT MANAGER ==========
@@ -1199,7 +1219,7 @@ class BotManager:
             volatility = kwargs.get('volatility', 3)
             grid_levels = kwargs.get('grid_levels', 5)
             
-            # TÌM COIN TỰ ĐỘNG
+            # TÌM COIN TỰ ĐỘNG TRÊN TOÀN BỘ BINANCE
             qualified_symbols = get_qualified_symbols(
                 self.api_key, self.api_secret, strategy_type, lev,
                 threshold, volatility, grid_levels
