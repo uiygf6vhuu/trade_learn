@@ -236,9 +236,9 @@ def get_top_volatile_symbols(limit=10, threshold=20):
         logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
 
-def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshold=None, max_candidates=8, final_limit=2):
+def get_qualified_symbols(api_key, api_secret, threshold=30, leverage=3, max_candidates=8, final_limit=3):
     """
-    Tìm coin đủ điều kiện theo chiến lược - TỐI ĐA 2 COIN
+    Tìm coin đủ điều kiện: biến động cao + đòn bẩy khả dụng
     """
     try:
         # KIỂM TRA API KEY TRƯỚC
@@ -248,20 +248,13 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
             return []
         
         # BƯỚC 1: Lấy danh sách coin biến động cao
-        if strategy_type == "Reverse 24h":
-            volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=threshold)
-        elif strategy_type == "Scalping":
-            volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=5)  # Ngưỡng cao hơn cho Scalping
-        elif strategy_type == "Safe Grid":
-            volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=10)  # Ngưỡng vừa cho Safe Grid
-        else:
-            volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=15)
+        volatile_candidates = get_top_volatile_symbols(limit=max_candidates, threshold=threshold)
         
         if not volatile_candidates:
-            logger.warning(f"❌ Không tìm thấy coin nào có biến động phù hợp")
+            logger.warning(f"❌ Không tìm thấy coin nào có biến động ≥{threshold}%")
             return []
         
-        logger.info(f"📊 {strategy_type}: tìm thấy {len(volatile_candidates)} coin biến động cao")
+        logger.info(f"📊 Tìm thấy {len(volatile_candidates)} coin biến động cao: {', '.join(volatile_candidates)}")
         
         # BƯỚC 2: Kiểm tra đòn bẩy trên các coin biến động
         qualified_symbols = []
@@ -271,16 +264,12 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 break
                 
             try:
-                # LOẠI BỎ BTC VÀ ETH ĐỂ ƯU TIÊN COIN MỚI
-                if symbol in ['BTCUSDT', 'ETHUSDT']:
-                    continue
-                    
                 # Kiểm tra đòn bẩy
                 leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
                 
                 if leverage_success:
                     qualified_symbols.append(symbol)
-                    logger.info(f"✅ {symbol}: phù hợp {strategy_type} + đòn bẩy {leverage}x")
+                    logger.info(f"✅ {symbol}: biến động ≥{threshold}% + đòn bẩy {leverage}x")
                 else:
                     logger.warning(f"⚠️ {symbol}: không thể đặt đòn bẩy {leverage}x")
                     
@@ -290,23 +279,11 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 logger.warning(f"⚠️ Lỗi kiểm tra {symbol}: {str(e)}")
                 continue
         
-        # Nếu không đủ coin, thêm coin dự phòng (không bao gồm BTC/ETH)
-        backup_symbols = ["ADAUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "ATOMUSDT", "AVAXUSDT", "SOLUSDT", "BNBUSDT"]
-        for symbol in backup_symbols:
-            if len(qualified_symbols) < final_limit and symbol not in qualified_symbols:
-                try:
-                    leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
-                    if leverage_success:
-                        qualified_symbols.append(symbol)
-                        logger.info(f"✅ Thêm coin dự phòng: {symbol}")
-                except:
-                    continue
-        
-        logger.info(f"🎯 {strategy_type}: {len(qualified_symbols)} coin đủ điều kiện")
+        logger.info(f"🎯 Kết quả: {len(qualified_symbols)} coin đủ điều kiện")
         return qualified_symbols
         
     except Exception as e:
-        logger.error(f"❌ Lỗi tìm coin {strategy_type}: {str(e)}")
+        logger.error(f"❌ Lỗi tìm coin đủ điều kiện: {str(e)}")
         return []
 
 # ========== API BINANCE ==========
@@ -630,7 +607,15 @@ class WebSocketManager:
 # ========== BASE BOT CLASS ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, strategy_name):
-        self.symbol = symbol.upper()
+        # XỬ LÝ SYMBOL = None CHO CHẾ ĐỘ TỰ ĐỘNG
+        if symbol is None:
+            # Tạm thời đặt symbol mặc định, sẽ được cập nhật sau khi tìm coin
+            self.symbol = "BTCUSDT"
+            self.auto_symbol_mode = True
+        else:
+            self.symbol = symbol.upper()
+            self.auto_symbol_mode = False
+            
         self.lev = lev
         self.percent = percent
         self.tp = tp
@@ -671,7 +656,9 @@ class BaseBot:
         # ĐẢM BẢO KHÔNG CÓ LỖI THIẾU THUỘC TÍNH
         self._ensure_required_attributes()
         
-        self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+        # CHỈ THÊM WEBSOCKET NẾU KHÔNG PHẢI CHẾ ĐỘ TỰ ĐỘNG HOÀN TOÀN
+        if not self.auto_symbol_mode:
+            self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
         
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -953,10 +940,6 @@ class BaseBot:
                     )
                     self.log(message)
                     
-                    # GỌI CALLBACK KHI ĐÓNG LỆNH (CHO CÁC BOT TỰ ĐỘNG)
-                    if hasattr(self, 'on_position_closed'):
-                        self.on_position_closed(self.symbol, reason)
-                    
                     self.status = "waiting"
                     self.side = ""
                     self.qty = 0
@@ -970,387 +953,6 @@ class BaseBot:
             error_msg = f"❌ Lỗi khi đóng lệnh: {str(e)}\n{traceback.format_exc()}"
             self.log(error_msg)
 
-
-# ========== REVERSE 24H BOT ==========
-class Reverse24hBot(BaseBot):
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
-        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
-        self.threshold = threshold
-        self.signal_check_interval = 300  # 5 phút
-        self.last_signal_check = 0
-        
-        # HỆ THỐNG TÌM COIN TỰ ĐỘNG
-        self.last_symbol_refresh = 0
-        self.symbol_refresh_interval = 300  # 5 phút refresh khi chưa đủ coin
-        self.max_symbols = 2  # TỐI ĐA 2 COIN
-        self.current_symbols = [] if symbol is None else [symbol]
-        self.active_symbols = {}  # Coin đang có vị thế
-        self.auto_symbol_mode = symbol is None
-        
-        # Khởi tạo danh sách coin ngay từ đầu
-        if self.auto_symbol_mode:
-            self.refresh_qualified_symbols(force_refresh=True)
-
-    def refresh_qualified_symbols(self, force_refresh=False):
-        """Làm mới danh sách coin đủ điều kiện - CHỈ TÌM KHI CHƯA ĐỦ 2 COIN"""
-        try:
-            if not self.auto_symbol_mode:
-                return
-                
-            current_time = time.time()
-            
-            # Nếu đã đủ coin và không phải force refresh, không cần tìm thêm
-            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
-                return
-                
-            # Kiểm tra thời gian refresh
-            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
-                return
-                
-            self.log(f"🔄 Đang tìm coin mới đủ điều kiện (ngưỡng: ±{self.threshold}%)...")
-            
-            # Số lượng coin cần tìm thêm
-            needed_symbols = self.max_symbols - len(self.current_symbols)
-            
-            new_symbols = get_qualified_symbols(
-                self.api_key, self.api_secret,
-                strategy_type="Reverse 24h",
-                leverage=self.lev,
-                threshold=self.threshold,
-                final_limit=needed_symbols
-            )
-            
-            if new_symbols:
-                # Thêm coin mới vào danh sách (không vượt quá max_symbols)
-                for symbol in new_symbols:
-                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
-                        self.current_symbols.append(symbol)
-                        self.log(f"✅ Thêm coin mới: {symbol}")
-                
-                self.log(f"📊 Danh sách coin hiện tại: {', '.join(self.current_symbols)}")
-                self.last_symbol_refresh = current_time
-                
-            else:
-                self.log(f"⚠️ Không tìm thấy coin nào đủ điều kiện")
-                
-        except Exception as e:
-            self.log(f"❌ Lỗi refresh symbol: {str(e)}")
-
-    def on_position_closed(self, symbol, reason=""):
-        """Callback khi một vị thế được đóng - TÌM COIN THAY THẾ NGAY"""
-        try:
-            # Xóa symbol khỏi active symbols
-            if symbol in self.active_symbols:
-                del self.active_symbols[symbol]
-                self.log(f"🗑️ Đã xóa {symbol} khỏi danh sách active")
-            
-            # Xóa symbol khỏi current symbols để tìm coin mới
-            if symbol in self.current_symbols:
-                self.current_symbols.remove(symbol)
-                self.log(f"🗑️ Đã xóa {symbol} khỏi danh sách hiện tại")
-            
-            # FORCE REFRESH ngay lập tức để tìm coin thay thế
-            self.log(f"🔎 Tìm coin thay thế cho {symbol}...")
-            self.refresh_qualified_symbols(force_refresh=True)
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi trong on_position_closed: {str(e)}")
-
-    def get_signal(self):
-        current_time = time.time()
-        
-        # Refresh danh sách coin định kỳ
-        self.refresh_qualified_symbols()
-        
-        if current_time - self.last_signal_check < self.signal_check_interval:
-            return None
-            
-        self.last_signal_check = current_time
-        
-        try:
-            # Nếu không có coin nào, không có tín hiệu
-            if not self.current_symbols:
-                return None
-                
-            # Kiểm tra tất cả coin trong danh sách
-            for symbol in self.current_symbols:
-                # Kiểm tra nếu coin này đã có vị thế
-                if symbol in self.active_symbols:
-                    continue
-                    
-                change_24h = get_24h_change(symbol)
-                
-                if abs(change_24h) >= self.threshold:
-                    # Cập nhật symbol hiện tại nếu tìm thấy tín hiệu
-                    if symbol != self.symbol:
-                        self.symbol = symbol
-                        self.log(f"🔄 Chuyển sang coin: {symbol} (Biến động: {change_24h:.2f}%)")
-                    
-                    # Thêm vào active symbols
-                    self.active_symbols[symbol] = "BUY" if change_24h < 0 else "SELL"
-                    
-                    if change_24h > 0:
-                        signal_info = (
-                            f"🎯 <b>TÍN HIỆU REVERSE 24H - SELL</b>\n"
-                            f"📊 Coin: {symbol}\n"
-                            f"📈 Biến động 24h: {change_24h:+.2f}%\n"
-                            f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
-                            f"💰 Đòn bẩy: {self.lev}x"
-                        )
-                        self.log(signal_info)
-                        return "SELL"
-                    else:
-                        signal_info = (
-                            f"🎯 <b>TÍN HIỆU REVERSE 24H - BUY</b>\n"
-                            f"📊 Coin: {symbol}\n"
-                            f"📉 Biến động 24h: {change_24h:+.2f}%\n"
-                            f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
-                            f"💰 Đòn bẩy: {self.lev}x"
-                        )
-                        self.log(signal_info)
-                        return "BUY"
-            
-            self.log(f"➖ Không có tín hiệu - Đang theo dõi {len(self.current_symbols)} coin")
-            return None
-            
-        except Exception as e:
-            error_msg = f"❌ Lỗi tín hiệu Reverse 24h: {str(e)}"
-            self.log(error_msg)
-            return None
-
-# ========== SCALPING BOT ==========
-class ScalpingBot(BaseBot):
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
-        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
-        
-        # CẤU HÌNH SCALPING
-        self.last_scalp_time = 0
-        self.scalp_cooldown = 300  # 5 phút
-        
-        # HỆ THỐNG TÌM COIN TỰ ĐỘNG
-        self.last_symbol_refresh = 0
-        self.symbol_refresh_interval = 300  # 5 phút
-        self.max_symbols = 2  # TỐI ĐA 2 COIN
-        self.current_symbols = [] if symbol is None else [symbol]
-        self.active_symbols = {}
-        self.auto_symbol_mode = symbol is None
-        
-        if self.auto_symbol_mode:
-            self.refresh_scalping_symbols(force_refresh=True)
-
-    def refresh_scalping_symbols(self, force_refresh=False):
-        """Tìm coin phù hợp cho Scalping"""
-        try:
-            if not self.auto_symbol_mode:
-                return
-                
-            current_time = time.time()
-            
-            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
-                return
-                
-            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
-                return
-                
-            self.log(f"🔄 Đang tìm coin Scalping...")
-            
-            needed_symbols = self.max_symbols - len(self.current_symbols)
-            
-            new_symbols = get_qualified_symbols(
-                self.api_key, self.api_secret,
-                strategy_type="Scalping",
-                leverage=self.lev,
-                final_limit=needed_symbols
-            )
-            
-            if new_symbols:
-                for symbol in new_symbols:
-                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
-                        self.current_symbols.append(symbol)
-                        self.log(f"✅ Thêm coin Scalping: {symbol}")
-                
-                self.log(f"📊 Danh sách coin Scalping: {', '.join(self.current_symbols)}")
-                self.last_symbol_refresh = current_time
-            else:
-                self.log(f"⚠️ Không tìm thấy coin Scalping nào")
-                
-        except Exception as e:
-            self.log(f"❌ Lỗi refresh Scalping symbol: {str(e)}")
-
-    def on_position_closed(self, symbol, reason=""):
-        """Callback khi đóng lệnh - tìm coin thay thế"""
-        try:
-            if symbol in self.active_symbols:
-                del self.active_symbols[symbol]
-            if symbol in self.current_symbols:
-                self.current_symbols.remove(symbol)
-            
-            self.log(f"🔎 Tìm coin Scalping thay thế cho {symbol}...")
-            self.refresh_scalping_symbols(force_refresh=True)
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi trong on_position_closed Scalping: {str(e)}")
-
-    def get_signal(self):
-        current_time = time.time()
-        
-        self.refresh_scalping_symbols()
-        
-        if current_time - self.last_scalp_time < self.scalp_cooldown:
-            return None
-            
-        if not self.current_symbols:
-            return None
-            
-        try:
-            for symbol in self.current_symbols:
-                if symbol in self.active_symbols:
-                    continue
-                    
-                # Logic Scalping đơn giản - biến động nhanh
-                price_data = self.get_recent_prices(symbol)
-                if len(price_data) < 10:
-                    continue
-                    
-                price_change = ((price_data[-1] - price_data[0]) / price_data[0]) * 100
-                
-                if abs(price_change) > 1.0:  # Biến động > 1%
-                    if symbol != self.symbol:
-                        self.symbol = symbol
-                        self.log(f"🔄 Chuyển sang coin Scalping: {symbol}")
-                    
-                    self.active_symbols[symbol] = "SELL" if price_change > 0 else "BUY"
-                    self.last_scalp_time = current_time
-                    
-                    if price_change > 0:
-                        self.log(f"⚡ Tín hiệu Scalping SELL - Biến động: {price_change:.2f}%")
-                        return "SELL"
-                    else:
-                        self.log(f"⚡ Tín hiệu Scalping BUY - Biến động: {price_change:.2f}%")
-                        return "BUY"
-                        
-            return None
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi tín hiệu Scalping: {str(e)}")
-            return None
-
-    def get_recent_prices(self, symbol, limit=10):
-        """Lấy giá gần đây cho coin"""
-        try:
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1m&limit={limit}"
-            data = binance_api_request(url)
-            if data:
-                return [float(k[4]) for k in data]  # Close prices
-        except:
-            pass
-        return []
-
-# ========== SAFE GRID BOT ==========
-class SafeGridBot(BaseBot):
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
-        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Safe Grid")
-        
-        # CẤU HÌNH SAFE GRID
-        self.grid_levels = 5
-        self.grid_spacing = 0.02  # 2%
-        self.orders_placed = 0
-        
-        # HỆ THỐNG TÌM COIN TỰ ĐỘNG
-        self.last_symbol_refresh = 0
-        self.symbol_refresh_interval = 300  # 5 phút
-        self.max_symbols = 2  # TỐI ĐA 2 COIN
-        self.current_symbols = [] if symbol is None else [symbol]
-        self.active_symbols = {}
-        self.auto_symbol_mode = symbol is None
-        
-        if self.auto_symbol_mode:
-            self.refresh_safegrid_symbols(force_refresh=True)
-
-    def refresh_safegrid_symbols(self, force_refresh=False):
-        """Tìm coin phù hợp cho Safe Grid"""
-        try:
-            if not self.auto_symbol_mode:
-                return
-                
-            current_time = time.time()
-            
-            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
-                return
-                
-            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
-                return
-                
-            self.log(f"🔄 Đang tìm coin Safe Grid...")
-            
-            needed_symbols = self.max_symbols - len(self.current_symbols)
-            
-            new_symbols = get_qualified_symbols(
-                self.api_key, self.api_secret,
-                strategy_type="Safe Grid",
-                leverage=self.lev,
-                final_limit=needed_symbols
-            )
-            
-            if new_symbols:
-                for symbol in new_symbols:
-                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
-                        self.current_symbols.append(symbol)
-                        self.log(f"✅ Thêm coin Safe Grid: {symbol}")
-                
-                self.log(f"📊 Danh sách coin Safe Grid: {', '.join(self.current_symbols)}")
-                self.last_symbol_refresh = current_time
-            else:
-                self.log(f"⚠️ Không tìm thấy coin Safe Grid nào")
-                
-        except Exception as e:
-            self.log(f"❌ Lỗi refresh Safe Grid symbol: {str(e)}")
-
-    def on_position_closed(self, symbol, reason=""):
-        """Callback khi đóng lệnh - tìm coin thay thế"""
-        try:
-            if symbol in self.active_symbols:
-                del self.active_symbols[symbol]
-            if symbol in self.current_symbols:
-                self.current_symbols.remove(symbol)
-            
-            self.log(f"🔎 Tìm coin Safe Grid thay thế cho {symbol}...")
-            self.refresh_safegrid_symbols(force_refresh=True)
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi trong on_position_closed Safe Grid: {str(e)}")
-
-    def get_signal(self):
-        self.refresh_safegrid_symbols()
-        
-        if not self.current_symbols:
-            return None
-            
-        try:
-            # Logic Grid đơn giản - luân phiên mua/bán
-            for symbol in self.current_symbols:
-                if symbol in self.active_symbols:
-                    continue
-                    
-                if symbol != self.symbol:
-                    self.symbol = symbol
-                    self.log(f"🔄 Chuyển sang coin Safe Grid: {symbol}")
-                
-                self.active_symbols[symbol] = "BUY"
-                self.orders_placed += 1
-                
-                if self.orders_placed % 2 == 1:
-                    self.log(f"🛡️ Tín hiệu Safe Grid BUY - Lệnh #{self.orders_placed}")
-                    return "BUY"
-                else:
-                    self.log(f"🛡️ Tín hiệu Safe Grid SELL - Lệnh #{self.orders_placed}")
-                    return "SELL"
-                    
-            return None
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi tín hiệu Safe Grid: {str(e)}")
-            return None
 
 # ========== CÁC CHIẾN LƯỢC BOT KHÁC NHAU ==========
 
@@ -1547,6 +1149,158 @@ class EMACrossoverBot(BaseBot):
     def get_signal(self):
         return self.get_ema_crossover_signal()
 
+class Reverse24hBot(BaseBot):
+    """Bot sử dụng chiến lược đảo chiều biến động 24h - TỰ ĐỘNG LẤY COIN ĐỦ ĐIỀU KIỆN"""
+    
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
+        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
+        self.threshold = threshold
+        self.signal_check_interval = 300  # 5 phút
+        self.last_signal_check = 0
+        self.last_symbol_refresh = 0
+        self.symbol_refresh_interval = 300  # 5 phút
+        self.max_symbols = 2  # TỐI ĐA 2 COIN
+        self.current_symbols = []  # Danh sách coin hiện tại
+        self.active_symbols = {}  # Coin đang có vị thế
+
+        # Nếu là chế độ tự động, khởi tạo danh sách coin
+        if self.auto_symbol_mode:
+            self.refresh_qualified_symbols(force_refresh=True)
+
+    def refresh_qualified_symbols(self, force_refresh=False):
+        """Làm mới danh sách coin đủ điều kiện"""
+        try:
+            if not self.auto_symbol_mode:
+                return
+                
+            current_time = time.time()
+            
+            # Nếu đã đủ coin và không phải force refresh, không cần tìm thêm
+            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
+                return
+                
+            # Kiểm tra thời gian refresh
+            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
+                return
+                
+            self.log(f"🔄 Đang tìm coin mới đủ điều kiện (ngưỡng: ±{self.threshold}%)...")
+            
+            # Số lượng coin cần tìm thêm
+            needed_symbols = self.max_symbols - len(self.current_symbols)
+            
+            new_symbols = get_qualified_symbols(
+                self.api_key, self.api_secret,
+                threshold=self.threshold,
+                leverage=self.lev,
+                max_candidates=8,
+                final_limit=needed_symbols
+            )
+            
+            if new_symbols:
+                # Thêm coin mới vào danh sách (không vượt quá max_symbols)
+                for symbol in new_symbols:
+                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
+                        self.current_symbols.append(symbol)
+                        self.log(f"✅ Thêm coin mới: {symbol}")
+                
+                self.log(f"📊 Danh sách coin hiện tại: {', '.join(self.current_symbols)}")
+                self.last_symbol_refresh = current_time
+                
+            else:
+                self.log(f"⚠️ Không tìm thấy coin nào đủ điều kiện")
+                
+        except Exception as e:
+            self.log(f"❌ Lỗi refresh symbol: {str(e)}")
+
+    def on_position_closed(self, symbol, reason=""):
+        """Callback khi một vị thế được đóng - TÌM COIN THAY THẾ NGAY"""
+        try:
+            # Xóa symbol khỏi active symbols
+            if symbol in self.active_symbols:
+                del self.active_symbols[symbol]
+                self.log(f"🗑️ Đã xóa {symbol} khỏi danh sách active")
+            
+            # Xóa symbol khỏi current symbols để tìm coin mới
+            if symbol in self.current_symbols:
+                self.current_symbols.remove(symbol)
+                self.log(f"🗑️ Đã xóa {symbol} khỏi danh sách hiện tại")
+            
+            # FORCE REFRESH ngay lập tức để tìm coin thay thế
+            self.log(f"🔎 Tìm coin thay thế cho {symbol}...")
+            self.refresh_qualified_symbols(force_refresh=True)
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi trong on_position_closed: {str(e)}")
+
+    def get_signal(self):
+        current_time = time.time()
+        
+        # Refresh danh sách coin định kỳ
+        self.refresh_qualified_symbols()
+        
+        if current_time - self.last_signal_check < self.signal_check_interval:
+            return None
+            
+        self.last_signal_check = current_time
+        
+        try:
+            # Nếu không có coin nào, không có tín hiệu
+            if not self.current_symbols:
+                return None
+                
+            # Kiểm tra tất cả coin trong danh sách
+            for symbol in self.current_symbols:
+                # Kiểm tra nếu coin này đã có vị thế
+                if symbol in self.active_symbols:
+                    continue
+                    
+                change_24h = get_24h_change(symbol)
+                
+                if abs(change_24h) >= self.threshold:
+                    # Cập nhật symbol hiện tại nếu tìm thấy tín hiệu
+                    if symbol != self.symbol:
+                        old_symbol = self.symbol
+                        self.symbol = symbol
+                        # Thêm websocket cho symbol mới
+                        self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+                        # Xóa websocket cũ nếu cần
+                        if old_symbol != "BTCUSDT":  # Không xóa BTCUSDT mặc định
+                            self.ws_manager.remove_symbol(old_symbol)
+                        self.log(f"🔄 Chuyển sang coin: {symbol} (Biến động: {change_24h:.2f}%)")
+                    
+                    # Thêm vào active symbols
+                    self.active_symbols[symbol] = "BUY" if change_24h < 0 else "SELL"
+                    
+                    if change_24h > 0:
+                        signal_info = (
+                            f"🎯 <b>TÍN HIỆU REVERSE 24H - SELL</b>\n"
+                            f"📊 Coin: {symbol}\n"
+                            f"📈 Biến động 24h: {change_24h:+.2f}%\n"
+                            f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
+                            f"💰 Đòn bẩy: {self.lev}x"
+                        )
+                        self.log(signal_info)
+                        return "SELL"
+                    else:
+                        signal_info = (
+                            f"🎯 <b>TÍN HIỆU REVERSE 24H - BUY</b>\n"
+                            f"📊 Coin: {symbol}\n"
+                            f"📉 Biến động 24h: {change_24h:+.2f}%\n"
+                            f"🎯 Ngưỡng kích hoạt: ±{self.threshold}%\n"
+                            f"💰 Đòn bẩy: {self.lev}x"
+                        )
+                        self.log(signal_info)
+                        return "BUY"
+            
+            self.log(f"➖ Không có tín hiệu - Đang theo dõi {len(self.current_symbols)} coin")
+            return None
+            
+        except Exception as e:
+            error_msg = f"❌ Lỗi tín hiệu Reverse 24h: {str(e)}"
+            self.log(error_msg)
+            return None
+
 class TrendFollowingBot(BaseBot):
     """Bot theo xu hướng sử dụng EMA và RSI"""
     
@@ -1588,6 +1342,251 @@ class TrendFollowingBot(BaseBot):
         except Exception as e:
             self.log(f"❌ Lỗi tín hiệu Trend Following: {str(e)}")
             return None
+
+class ScalpingBot(BaseBot):
+    """Bot Scalping tốc độ cao - TỰ ĐỘNG TÌM COIN"""
+    
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
+        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Scalping")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
+        self.last_scalp_time = 0
+        self.scalp_cooldown = 300  # 5 phút
+        self.last_symbol_refresh = 0
+        self.symbol_refresh_interval = 300  # 5 phút
+        self.max_symbols = 2  # TỐI ĐA 2 COIN
+        self.current_symbols = []  # Danh sách coin hiện tại
+        self.active_symbols = {}  # Coin đang có vị thế
+
+        # Nếu là chế độ tự động, khởi tạo danh sách coin
+        if self.auto_symbol_mode:
+            self.refresh_scalping_symbols(force_refresh=True)
+
+    def refresh_scalping_symbols(self, force_refresh=False):
+        """Tìm coin phù hợp cho Scalping"""
+        try:
+            if not self.auto_symbol_mode:
+                return
+                
+            current_time = time.time()
+            
+            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
+                return
+                
+            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
+                return
+                
+            self.log(f"🔄 Đang tìm coin Scalping...")
+            
+            needed_symbols = self.max_symbols - len(self.current_symbols)
+            
+            new_symbols = get_qualified_symbols(
+                self.api_key, self.api_secret,
+                threshold=5,  # Ngưỡng cao cho Scalping
+                leverage=self.lev,
+                max_candidates=8,
+                final_limit=needed_symbols
+            )
+            
+            if new_symbols:
+                for symbol in new_symbols:
+                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
+                        self.current_symbols.append(symbol)
+                        self.log(f"✅ Thêm coin Scalping: {symbol}")
+                
+                self.log(f"📊 Danh sách coin Scalping: {', '.join(self.current_symbols)}")
+                self.last_symbol_refresh = current_time
+            else:
+                self.log(f"⚠️ Không tìm thấy coin Scalping nào")
+                
+        except Exception as e:
+            self.log(f"❌ Lỗi refresh Scalping symbol: {str(e)}")
+
+    def on_position_closed(self, symbol, reason=""):
+        """Callback khi đóng lệnh - tìm coin thay thế"""
+        try:
+            if symbol in self.active_symbols:
+                del self.active_symbols[symbol]
+            if symbol in self.current_symbols:
+                self.current_symbols.remove(symbol)
+            
+            self.log(f"🔎 Tìm coin Scalping thay thế cho {symbol}...")
+            self.refresh_scalping_symbols(force_refresh=True)
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi trong on_position_closed Scalping: {str(e)}")
+
+    def get_signal(self):
+        current_time = time.time()
+        
+        self.refresh_scalping_symbols()
+        
+        if current_time - self.last_scalp_time < self.scalp_cooldown:
+            return None
+            
+        if not self.current_symbols:
+            return None
+            
+        try:
+            for symbol in self.current_symbols:
+                if symbol in self.active_symbols:
+                    continue
+                    
+                # Logic Scalping đơn giản - biến động nhanh
+                price_data = self.get_recent_prices(symbol)
+                if len(price_data) < 10:
+                    continue
+                    
+                price_change = ((price_data[-1] - price_data[0]) / price_data[0]) * 100
+                
+                if abs(price_change) > 1.0:  # Biến động > 1%
+                    if symbol != self.symbol:
+                        old_symbol = self.symbol
+                        self.symbol = symbol
+                        # Thêm websocket cho symbol mới
+                        self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+                        # Xóa websocket cũ nếu cần
+                        if old_symbol != "BTCUSDT":  # Không xóa BTCUSDT mặc định
+                            self.ws_manager.remove_symbol(old_symbol)
+                        self.log(f"🔄 Chuyển sang coin Scalping: {symbol}")
+                    
+                    self.active_symbols[symbol] = "SELL" if price_change > 0 else "BUY"
+                    self.last_scalp_time = current_time
+                    
+                    if price_change > 0:
+                        self.log(f"⚡ Tín hiệu Scalping SELL - Biến động: {price_change:.2f}%")
+                        return "SELL"
+                    else:
+                        self.log(f"⚡ Tín hiệu Scalping BUY - Biến động: {price_change:.2f}%")
+                        return "BUY"
+                        
+            return None
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi tín hiệu Scalping: {str(e)}")
+            return None
+
+    def get_recent_prices(self, symbol, limit=10):
+        """Lấy giá gần đây cho coin"""
+        try:
+            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1m&limit={limit}"
+            data = binance_api_request(url)
+            if data:
+                return [float(k[4]) for k in data]  # Close prices
+        except:
+            pass
+        return []
+
+class SafeGridBot(BaseBot):
+    """Bot Grid an toàn với nhiều lệnh - TỰ ĐỘNG TÌM COIN"""
+    
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id):
+        super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Safe Grid")
+        # KHỞI TẠO TẤT CẢ THUỘC TÍNH CẦN THIẾT
+        self.grid_levels = 5
+        self.grid_spacing = 0.02  # 2%
+        self.orders_placed = 0
+        self.last_symbol_refresh = 0
+        self.symbol_refresh_interval = 300  # 5 phút
+        self.max_symbols = 2  # TỐI ĐA 2 COIN
+        self.current_symbols = []  # Danh sách coin hiện tại
+        self.active_symbols = {}  # Coin đang có vị thế
+
+        # Nếu là chế độ tự động, khởi tạo danh sách coin
+        if self.auto_symbol_mode:
+            self.refresh_safegrid_symbols(force_refresh=True)
+
+    def refresh_safegrid_symbols(self, force_refresh=False):
+        """Tìm coin phù hợp cho Safe Grid"""
+        try:
+            if not self.auto_symbol_mode:
+                return
+                
+            current_time = time.time()
+            
+            if len(self.current_symbols) >= self.max_symbols and not force_refresh:
+                return
+                
+            if not force_refresh and current_time - self.last_symbol_refresh < self.symbol_refresh_interval:
+                return
+                
+            self.log(f"🔄 Đang tìm coin Safe Grid...")
+            
+            needed_symbols = self.max_symbols - len(self.current_symbols)
+            
+            new_symbols = get_qualified_symbols(
+                self.api_key, self.api_secret,
+                threshold=10,  # Ngưỡng vừa cho Safe Grid
+                leverage=self.lev,
+                max_candidates=8,
+                final_limit=needed_symbols
+            )
+            
+            if new_symbols:
+                for symbol in new_symbols:
+                    if len(self.current_symbols) < self.max_symbols and symbol not in self.current_symbols:
+                        self.current_symbols.append(symbol)
+                        self.log(f"✅ Thêm coin Safe Grid: {symbol}")
+                
+                self.log(f"📊 Danh sách coin Safe Grid: {', '.join(self.current_symbols)}")
+                self.last_symbol_refresh = current_time
+            else:
+                self.log(f"⚠️ Không tìm thấy coin Safe Grid nào")
+                
+        except Exception as e:
+            self.log(f"❌ Lỗi refresh Safe Grid symbol: {str(e)}")
+
+    def on_position_closed(self, symbol, reason=""):
+        """Callback khi đóng lệnh - tìm coin thay thế"""
+        try:
+            if symbol in self.active_symbols:
+                del self.active_symbols[symbol]
+            if symbol in self.current_symbols:
+                self.current_symbols.remove(symbol)
+            
+            self.log(f"🔎 Tìm coin Safe Grid thay thế cho {symbol}...")
+            self.refresh_safegrid_symbols(force_refresh=True)
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi trong on_position_closed Safe Grid: {str(e)}")
+
+    def get_signal(self):
+        self.refresh_safegrid_symbols()
+        
+        if not self.current_symbols:
+            return None
+            
+        try:
+            # Logic Grid đơn giản - luân phiên mua/bán
+            for symbol in self.current_symbols:
+                if symbol in self.active_symbols:
+                    continue
+                    
+                if symbol != self.symbol:
+                    old_symbol = self.symbol
+                    self.symbol = symbol
+                    # Thêm websocket cho symbol mới
+                    self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+                    # Xóa websocket cũ nếu cần
+                    if old_symbol != "BTCUSDT":  # Không xóa BTCUSDT mặc định
+                        self.ws_manager.remove_symbol(old_symbol)
+                    self.log(f"🔄 Chuyển sang coin Safe Grid: {symbol}")
+                
+                self.active_symbols[symbol] = "BUY"
+                self.orders_placed += 1
+                
+                if self.orders_placed % 2 == 1:
+                    self.log(f"🛡️ Tín hiệu Safe Grid BUY - Lệnh #{self.orders_placed}")
+                    return "BUY"
+                else:
+                    self.log(f"🛡️ Tín hiệu Safe Grid SELL - Lệnh #{self.orders_placed}")
+                    return "SELL"
+                    
+            return None
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi tín hiệu Safe Grid: {str(e)}")
+            return None
+
 
 # ========== BOT MANAGER ĐA CHIẾN LƯỢC ==========
 class BotManager:
