@@ -573,13 +573,17 @@ def calc_rsi(prices, period=14):
         return None
 
 def calc_ema(prices, period):
-    prices = np.array(prices)
-    if len(prices) < period:
+    try:
+        prices = np.array(prices)
+        if len(prices) < period:
+            return None
+        weights = np.exp(np.linspace(-1., 0., period))
+        weights /= weights.sum()
+        ema = np.convolve(prices, weights, mode='valid')
+        return float(ema[-1])
+    except Exception as e:
+        logger.error(f"Lỗi tính EMA: {str(e)}")
         return None
-    weights = np.exp(np.linspace(-1., 0., period))
-    weights /= weights.sum()
-    ema = np.convolve(prices, weights, mode='valid')
-    return float(ema[-1])
 
 # ========== WEBSOCKET MANAGER ==========
 class WebSocketManager:
@@ -834,9 +838,15 @@ class BaseBot:
             step_size = get_step_size(self.symbol, self.api_key, self.api_secret)
             usd_amount = balance * (self.percent / 100)
             qty = (usd_amount * self.lev) / current_price
-            qty = math.floor(qty / step_size) * step_size
+            
+            # LÀM TRÒN SỐ LƯỢNG THEO STEP SIZE
+            if step_size > 0:
+                qty = math.floor(qty / step_size) * step_size
+            else:
+                qty = round(qty, 8)  # Fallback làm tròn 8 chữ số thập phân
 
-            if qty <= step_size:
+            # KIỂM TRA SỐ LƯỢNG TỐI THIỂU
+            if qty <= 0:
                 self.log("❌ Số lượng quá nhỏ")
                 return False
 
@@ -867,14 +877,17 @@ class BaseBot:
                     self.log(message)
                     return True
                 else:
-                    self.log("❌ Lệnh không khớp")
+                    self.log(f"❌ Lệnh không khớp - Số lượng: {qty}")
                     return False
             else:
-                self.log(f"❌ Lỗi đặt lệnh {side}")
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                self.log(f"❌ Lỗi đặt lệnh {side}: {error_msg}")
                 return False
                 
         except Exception as e:
             self.log(f"❌ Lỗi mở lệnh: {str(e)}")
+            import traceback
+            self.log(f"❌ Chi tiết lỗi: {traceback.format_exc()}")
             return False
 
     def close_position(self, reason=""):
@@ -909,7 +922,8 @@ class BaseBot:
                 self.last_close_time = time.time()
                 return True
             else:
-                self.log("❌ Lỗi đóng lệnh")
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                self.log(f"❌ Lỗi đóng lệnh: {error_msg}")
                 return False
                 
         except Exception as e:
@@ -1105,13 +1119,17 @@ class Safe_Grid_Bot(BaseBot):
         self.orders_placed = 0
 
     def get_signal(self):
-        if self.orders_placed < self.grid_levels:
-            self.orders_placed += 1
-            if self.orders_placed % 2 == 1:
-                return "BUY"
-            else:
-                return "SELL"
-        return None
+        try:
+            if self.orders_placed < self.grid_levels:
+                self.orders_placed += 1
+                if self.orders_placed % 2 == 1:
+                    return "BUY"
+                else:
+                    return "SELL"
+            return None
+        except Exception as e:
+            self.log(f"❌ Lỗi tính tín hiệu Safe Grid: {str(e)}")
+            return None
 
 # ========== BOT MANAGER ==========
 class BotManager:
@@ -1172,7 +1190,7 @@ class BotManager:
         
         test_balance = get_balance(self.api_key, self.api_secret)
         if test_balance is None:
-            self.log("❌ LỚI: Không thể kết nối Binance")
+            self.log("❌ LỖI: Không thể kết nối Binance")
             return False
             
         # CHIẾN LƯỢC TỰ ĐỘNG
