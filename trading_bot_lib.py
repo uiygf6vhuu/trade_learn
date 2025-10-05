@@ -92,7 +92,13 @@ def create_strategy_keyboard():
 
 def create_symbols_keyboard(strategy=None):
     """Bàn phím chọn coin"""
-    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+    try:
+        # Lấy danh sách coin từ Binance thực tế
+        symbols = get_all_usdt_pairs(limit=12)
+        if not symbols:
+            symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+    except:
+        symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
     
     keyboard = []
     row = []
@@ -241,11 +247,13 @@ class CoinManager:
 
 # ========== HÀM TÌM COIN TOÀN BINANCE ==========
 def get_all_usdt_pairs(limit=100):
+    """Lấy toàn bộ coin USDT từ Binance, không dùng danh sách cố định"""
     try:
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
-            return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
+            logger.warning("Không lấy được dữ liệu từ Binance, trả về danh sách rỗng")
+            return []
         
         usdt_pairs = []
         for symbol_info in data.get('symbols', []):
@@ -253,48 +261,56 @@ def get_all_usdt_pairs(limit=100):
             if symbol.endswith('USDT') and symbol_info.get('status') == 'TRADING':
                 usdt_pairs.append(symbol)
         
+        logger.info(f"✅ Lấy được {len(usdt_pairs)} coin USDT từ Binance")
         return usdt_pairs[:limit] if limit else usdt_pairs
         
     except Exception as e:
-        logger.error(f"Lỗi lấy danh sách coin: {str(e)}")
-        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
+        logger.error(f"❌ Lỗi lấy danh sách coin từ Binance: {str(e)}")
+        return []
 
 def get_top_volatile_symbols(limit=10, threshold=20):
-    """Lấy danh sách coin có biến động 24h cao nhất"""
+    """Lấy danh sách coin có biến động 24h cao nhất từ toàn bộ Binance"""
     try:
+        all_symbols = get_all_usdt_pairs(limit=200)  # Lấy nhiều hơn để lọc
+        if not all_symbols:
+            logger.warning("Không lấy được coin từ Binance")
+            return []
+        
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
         if not data:
-            return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT"]
+            return []
         
-        # Lọc các symbol USDT và có biến động > threshold
+        # Tạo dict để tra cứu nhanh
+        ticker_dict = {ticker['symbol']: ticker for ticker in data if 'symbol' in ticker}
+        
         volatile_pairs = []
-        for ticker in data:
-            symbol = ticker.get('symbol', '')
-            if symbol.endswith('USDT'):
-                change = float(ticker.get('priceChangePercent', 0))
-                if abs(change) >= threshold:
-                    volatile_pairs.append((symbol, abs(change)))
+        for symbol in all_symbols:
+            if symbol in ticker_dict:
+                ticker = ticker_dict[symbol]
+                try:
+                    change = float(ticker.get('priceChangePercent', 0))
+                    volume = float(ticker.get('quoteVolume', 0))
+                    
+                    # Lọc theo ngưỡng biến động và volume
+                    if abs(change) >= threshold and volume > 1000000:  # Volume > 1M USDT
+                        volatile_pairs.append((symbol, abs(change)))
+                except (ValueError, TypeError):
+                    continue
         
         # Sắp xếp theo biến động giảm dần
         volatile_pairs.sort(key=lambda x: x[1], reverse=True)
         
-        # Lấy top limit
         top_symbols = [pair[0] for pair in volatile_pairs[:limit]]
-        
-        # Nếu không đủ, thêm các symbol mặc định
-        default_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT", "SOLUSDT", "MATICUSDT"]
-        for symbol in default_symbols:
-            if len(top_symbols) < limit and symbol not in top_symbols:
-                top_symbols.append(symbol)
-        
-        return top_symbols[:limit]
+        logger.info(f"✅ Tìm thấy {len(top_symbols)} coin biến động ≥{threshold}%")
+        return top_symbols
         
     except Exception as e:
-        logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
-        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
+        logger.error(f"❌ Lỗi lấy danh sách coin biến động: {str(e)}")
+        return []
 
 def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshold=None, volatility=None, grid_levels=None, max_candidates=20, final_limit=2):
+    """Tìm coin phù hợp từ TOÀN BỘ Binance - KHÔNG dùng danh sách cố định"""
     try:
         test_balance = get_balance(api_key, api_secret)
         if test_balance is None:
@@ -304,28 +320,48 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
         coin_manager = CoinManager()
         managed_coins = coin_manager.get_managed_coins()
         
+        # LẤY TOÀN BỘ COIN TỪ BINANCE
+        all_symbols = get_all_usdt_pairs(limit=200)
+        if not all_symbols:
+            logger.error("❌ Không lấy được danh sách coin từ Binance")
+            return []
+        
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
         if not data:
-            return ["ADAUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT"]
+            return []
+        
+        # Tạo dict để tra cứu nhanh
+        ticker_dict = {ticker['symbol']: ticker for ticker in data if 'symbol' in ticker}
         
         qualified_symbols = []
         
-        for ticker in data:
-            symbol = ticker.get('symbol', '')
-            if symbol.endswith('USDT'):
-                if symbol in ['BTCUSDT', 'ETHUSDT']:
-                    continue
+        for symbol in all_symbols:
+            if symbol not in ticker_dict:
+                continue
                 
-                if symbol in managed_coins:
-                    continue
-                
+            # Bỏ qua BTC và ETH để tránh rủi ro cao
+            if symbol in ['BTCUSDT', 'ETHUSDT']:
+                continue
+            
+            # Bỏ qua coin đã có bot quản lý
+            if symbol in managed_coins:
+                continue
+            
+            ticker = ticker_dict[symbol]
+            
+            try:
                 price_change = abs(float(ticker.get('priceChangePercent', 0)))
                 volume = float(ticker.get('quoteVolume', 0))
                 high_price = float(ticker.get('highPrice', 0))
                 low_price = float(ticker.get('lowPrice', 0))
-                price_range = ((high_price - low_price) / low_price) * 100 if low_price > 0 else 0
                 
+                if low_price > 0:
+                    price_range = ((high_price - low_price) / low_price) * 100
+                else:
+                    price_range = 0
+                
+                # KIỂM TRA ĐIỀU KIỆN CHO TỪNG CHIẾN LƯỢC
                 if strategy_type == "Reverse 24h":
                     if price_change >= threshold and volume > 5000000:
                         qualified_symbols.append((symbol, price_change))
@@ -338,7 +374,11 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 elif strategy_type == "Trend Following":
                     if 2.0 <= price_change <= 8.0 and volume > 5000000 and price_range >= 1.5:
                         qualified_symbols.append((symbol, price_change))
+                        
+            except (ValueError, TypeError) as e:
+                continue
         
+        # Sắp xếp theo điểm số
         if strategy_type == "Reverse 24h":
             qualified_symbols.sort(key=lambda x: x[1], reverse=True)
         elif strategy_type == "Scalping":
@@ -348,6 +388,7 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
         elif strategy_type == "Trend Following":
             qualified_symbols.sort(key=lambda x: x[1], reverse=True)
         
+        # KIỂM TRA ĐÒN BẨY VÀ STEP SIZE
         final_symbols = []
         for symbol, score in qualified_symbols[:max_candidates]:
             if len(final_symbols) >= final_limit:
@@ -364,24 +405,18 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 logger.error(f"❌ Lỗi kiểm tra {symbol}: {str(e)}")
                 continue
         
-        backup_symbols = ["ADAUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "ATOMUSDT", "AVAXUSDT", "SOLUSDT", "BNBUSDT"]
-        for symbol in backup_symbols:
-            if len(final_symbols) < final_limit and symbol not in final_symbols and symbol not in managed_coins:
-                try:
-                    leverage_success = set_leverage(symbol, leverage, api_key, api_secret)
-                    step_size = get_step_size(symbol, api_key, api_secret)
-                    if leverage_success and step_size > 0:
-                        final_symbols.append(symbol)
-                        logger.info(f"✅ {symbol}: fallback cho {strategy_type}")
-                except:
-                    continue
+        # QUAN TRỌNG: NẾU KHÔNG TÌM ĐƯỢC COIN NÀO, TRẢ VỀ DANH SÁCH RỖNG
+        # KHÔNG DÙNG BACKUP SYMBOLS NỮA
+        if not final_symbols:
+            logger.warning(f"⚠️ {strategy_type}: không tìm thấy coin phù hợp, sẽ thử lại sau")
+        else:
+            logger.info(f"🎯 {strategy_type}: tìm thấy {len(final_symbols)} coin phù hợp")
         
-        logger.info(f"🎯 {strategy_type}: tìm thấy {len(final_symbols)} coin phù hợp")
         return final_symbols[:final_limit]
         
     except Exception as e:
         logger.error(f"❌ Lỗi tìm coin {strategy_type}: {str(e)}")
-        return []
+        return []  # Luôn trả về list rỗng khi có lỗi
 
 # ========== API BINANCE ==========
 def sign(query, api_secret):
@@ -565,6 +600,9 @@ def get_24h_change(symbol):
         data = binance_api_request(url)
         if data and 'priceChangePercent' in data:
             change = data['priceChangePercent']
+            # SỬA LỖI: KIỂM TRA None TRƯỚC KHI CHUYỂN ĐỔI
+            if change is None:
+                return 0.0
             return float(change) if change is not None else 0.0
         return 0.0
     except Exception as e:
@@ -959,9 +997,10 @@ class BaseBot:
             
         roi = (profit / invested) * 100
 
-        if roi >= self.tp:
+        # SỬA LỖI: THÊM KIỂM TRA None CHO tp và sl
+        if self.tp is not None and roi >= self.tp:
             self.close_position(f"✅ Đạt TP {self.tp}% (ROI: {roi:.2f}%)")
-        elif self.sl > 0 and roi <= -self.sl:
+        elif self.sl is not None and self.sl > 0 and roi <= -self.sl:
             self.close_position(f"❌ Đạt SL {self.sl}% (ROI: {roi:.2f}%)")
 
 # ========== CÁC CHIẾN LƯỢC GIAO DỊCH ==========
@@ -1048,8 +1087,9 @@ class Reverse_24h_Bot(BaseBot):
             change_24h = get_24h_change(self.symbol)
             self.last_24h_check = current_time
 
-            # SỬA LỖI: ĐẢM BẢO LUÔN LÀ SỐ
-            change_24h = change_24h if change_24h is not None else 0
+            # SỬA LỖI: ĐẢM BẢO LUÔN LÀ SỐ, KHÔNG PHẢI None
+            if change_24h is None:
+                return None
 
             signal = None
             if change_24h >= self.threshold:
@@ -1076,6 +1116,10 @@ class Trend_Following_Bot(BaseBot):
                 return None
 
             recent_prices = self.prices[-self.trend_period:]
+            # SỬA LỖI: KIỂM TRA DANH SÁCH RỖNG
+            if len(recent_prices) < 2:
+                return None
+                
             price_change = (recent_prices[-1] - recent_prices[0]) / recent_prices[0]
 
             signal = None
@@ -1206,14 +1250,15 @@ class BotManager:
             volatility = kwargs.get('volatility', 3)
             grid_levels = kwargs.get('grid_levels', 5)
             
-            # SỬA LỖI: GỌI ĐÚNG HÀM get_qualified_symbols
+            # SỬA: GỌI HÀM TÌM COIN TỪ TOÀN BỘ BINANCE
             qualified_symbols = get_qualified_symbols(
                 self.api_key, self.api_secret, strategy_type, lev,
                 threshold, volatility, grid_levels, max_candidates=20, final_limit=2
             )
             
+            # QUAN TRỌNG: NẾU KHÔNG TÌM ĐƯỢC COIN, KHÔNG TẠO BOT
             if not qualified_symbols:
-                self.log(f"❌ Không tìm thấy coin phù hợp cho {strategy_type}")
+                self.log(f"⚠️ {strategy_type}: không tìm thấy coin phù hợp, sẽ thử lại sau")
                 return False
             
             success_count = 0
@@ -1371,7 +1416,7 @@ class BotManager:
                         user_state['step'] = 'waiting_threshold'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin phù hợp nhất\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin phù hợp từ TOÀN BỘ Binance\n\n"
                             f"Chọn ngưỡng biến động (%):",
                             chat_id,
                             create_threshold_keyboard(),
@@ -1381,7 +1426,7 @@ class BotManager:
                         user_state['step'] = 'waiting_volatility'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin biến động nhanh\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin biến động nhanh từ TOÀN BỘ Binance\n\n"
                             f"Chọn biến động tối thiểu (%):",
                             chat_id,
                             create_volatility_keyboard(),
@@ -1391,7 +1436,7 @@ class BotManager:
                         user_state['step'] = 'waiting_grid_levels'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin ổn định\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin ổn định từ TOÀN BỘ Binance\n\n"
                             f"Chọn số lệnh grid:",
                             chat_id,
                             create_grid_levels_keyboard(),
@@ -1401,7 +1446,7 @@ class BotManager:
                         user_state['step'] = 'waiting_leverage'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin theo xu hướng\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin theo xu hướng từ TOÀN BỘ Binance\n\n"
                             f"Chọn đòn bẩy:",
                             chat_id,
                             create_leverage_keyboard(strategy),
@@ -1695,7 +1740,7 @@ class BotManager:
             
             send_telegram(
                 f"🎯 <b>CHỌN CHIẾN LƯỢC GIAO DỊCH</b>\n\n"
-                f"💡 <b>Chiến lược tự động (Tìm coin):</b>\n• Reverse 24h\n• Scalping  \n• Safe Grid\n• Trend Following\n\n"
+                f"💡 <b>Chiến lược tự động (Tìm coin từ TOÀN BỘ Binance):</b>\n• Reverse 24h\n• Scalping  \n• Safe Grid\n• Trend Following\n\n"
                 f"💡 <b>Chiến lược thủ công:</b>\n• RSI/EMA Recursive\n• EMA Crossover",
                 chat_id,
                 create_strategy_keyboard(),
@@ -1796,19 +1841,19 @@ class BotManager:
                 "🎯 <b>DANH SÁCH CHIẾN LƯỢC</b>\n\n"
                 "🎯 <b>Reverse 24h</b> - TỰ ĐỘNG\n"
                 "• Đảo chiều biến động 24h\n"
-                "• Tự tìm coin biến động cao\n"
+                "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Ngưỡng biến động: 30-200%\n\n"
                 "⚡ <b>Scalping</b> - TỰ ĐỘNG\n"
                 "• Giao dịch tốc độ cao\n"
-                "• Tự tìm coin biến động nhanh\n"
+                "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Biến động tối thiểu: 2-15%\n\n"
                 "🛡️ <b>Safe Grid</b> - TỰ ĐỘNG\n"
                 "• Grid an toàn\n"
-                "• Tự tìm coin ổn định\n"
+                "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Số lệnh grid: 3-20\n\n"
                 "📈 <b>Trend Following</b> - TỰ ĐỘNG\n"
                 "• Theo xu hướng giá\n"
-                "• Tự tìm coin có xu hướng rõ\n"
+                "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Biến động vừa phải: 2-8%\n\n"
                 "🤖 <b>RSI/EMA Recursive</b> - THỦ CÔNG\n"
                 "• Phân tích RSI + EMA đệ quy\n\n"
