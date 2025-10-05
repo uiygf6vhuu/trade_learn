@@ -90,6 +90,120 @@ def create_strategy_keyboard():
         "one_time_keyboard": True
     }
 
+def create_symbols_keyboard(strategy=None):
+    """Bàn phím chọn coin"""
+    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+    
+    keyboard = []
+    row = []
+    for symbol in symbols:
+        row.append({"text": symbol})
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([{"text": "❌ Hủy bỏ"}])
+    
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_leverage_keyboard(strategy=None):
+    """Bàn phím chọn đòn bẩy"""
+    leverages = ["3", "5", "10", "15", "20", "25", "50", "75", "100"]
+    
+    keyboard = []
+    row = []
+    for lev in leverages:
+        row.append({"text": f"{lev}x"})
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([{"text": "❌ Hủy bỏ"}])
+    
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_percent_keyboard():
+    """Bàn phím chọn % số dư"""
+    return {
+        "keyboard": [
+            [{"text": "1"}, {"text": "3"}, {"text": "5"}, {"text": "10"}],
+            [{"text": "15"}, {"text": "20"}, {"text": "25"}, {"text": "50"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_tp_keyboard():
+    """Bàn phím chọn Take Profit"""
+    return {
+        "keyboard": [
+            [{"text": "50"}, {"text": "100"}, {"text": "200"}],
+            [{"text": "300"}, {"text": "500"}, {"text": "1000"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_sl_keyboard():
+    """Bàn phím chọn Stop Loss"""
+    return {
+        "keyboard": [
+            [{"text": "0"}, {"text": "50"}, {"text": "100"}],
+            [{"text": "150"}, {"text": "200"}, {"text": "500"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_threshold_keyboard():
+    """Bàn phím chọn ngưỡng biến động cho Reverse 24h"""
+    return {
+        "keyboard": [
+            [{"text": "30"}, {"text": "50"}, {"text": "70"}],
+            [{"text": "100"}, {"text": "150"}, {"text": "200"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_volatility_keyboard():
+    """Bàn phím chọn biến động cho Scalping"""
+    return {
+        "keyboard": [
+            [{"text": "2"}, {"text": "3"}, {"text": "5"}],
+            [{"text": "7"}, {"text": "10"}, {"text": "15"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_grid_levels_keyboard():
+    """Bàn phím chọn số lệnh grid cho Safe Grid"""
+    return {
+        "keyboard": [
+            [{"text": "3"}, {"text": "5"}, {"text": "7"}],
+            [{"text": "10"}, {"text": "15"}, {"text": "20"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
 # ========== QUẢN LÝ COIN CHUNG ==========
 class CoinManager:
     _instance = None
@@ -143,6 +257,41 @@ def get_all_usdt_pairs(limit=100):
         
     except Exception as e:
         logger.error(f"Lỗi lấy danh sách coin: {str(e)}")
+        return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
+
+def get_top_volatile_symbols(limit=10, threshold=20):
+    """Lấy danh sách coin có biến động 24h cao nhất"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        data = binance_api_request(url)
+        if not data:
+            return ["BTCUSDT", "ETHUSDT", "ADAUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT"]
+        
+        # Lọc các symbol USDT và có biến động > threshold
+        volatile_pairs = []
+        for ticker in data:
+            symbol = ticker.get('symbol', '')
+            if symbol.endswith('USDT'):
+                change = float(ticker.get('priceChangePercent', 0))
+                if abs(change) >= threshold:
+                    volatile_pairs.append((symbol, abs(change)))
+        
+        # Sắp xếp theo biến động giảm dần
+        volatile_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Lấy top limit
+        top_symbols = [pair[0] for pair in volatile_pairs[:limit]]
+        
+        # Nếu không đủ, thêm các symbol mặc định
+        default_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT", "DOGEUSDT", "DOTUSDT", "LINKUSDT", "SOLUSDT", "MATICUSDT"]
+        for symbol in default_symbols:
+            if len(top_symbols) < limit and symbol not in top_symbols:
+                top_symbols.append(symbol)
+        
+        return top_symbols[:limit]
+        
+    except Exception as e:
+        logger.error(f"Lỗi lấy danh sách coin biến động: {str(e)}")
         return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"]
 
 def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshold=None, volatility=None, grid_levels=None, max_candidates=20, final_limit=2):
@@ -361,6 +510,21 @@ def place_order(symbol, side, qty, api_key, api_secret):
     except Exception as e:
         logger.error(f"Lỗi đặt lệnh: {str(e)}")
     return None
+
+def cancel_all_orders(symbol, api_key, api_secret):
+    try:
+        ts = int(time.time() * 1000)
+        params = {"symbol": symbol.upper(), "timestamp": ts}
+        query = urllib.parse.urlencode(params)
+        sig = sign(query, api_secret)
+        url = f"https://fapi.binance.com/fapi/v1/allOpenOrders?{query}&signature={sig}"
+        headers = {'X-MBX-APIKEY': api_key}
+        
+        binance_api_request(url, method='DELETE', headers=headers)
+        return True
+    except Exception as e:
+        logger.error(f"Lỗi hủy lệnh: {str(e)}")
+    return False
 
 def get_current_price(symbol):
     try:
@@ -620,6 +784,7 @@ class BaseBot:
         self._stop = True
         self.ws_manager.remove_symbol(self.symbol)
         self.coin_manager.unregister_coin(self.symbol)
+        cancel_all_orders(self.symbol, self.api_key, self.api_secret)
         self.log(f"🔴 Bot dừng cho {self.symbol}")
 
     def check_position_status(self):
@@ -869,7 +1034,7 @@ class EMA_Crossover_Bot(BaseBot):
             return None
 
 class Reverse_24h_Bot(BaseBot):
-    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=50):
+    def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, threshold=30):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, telegram_bot_token, telegram_chat_id, "Reverse 24h")
         self.threshold = threshold
         self.last_24h_check = 0
