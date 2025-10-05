@@ -748,17 +748,21 @@ class BaseBot:
         self.position_open = False
         self._stop = False
         
+        # THÊM: Biến theo dõi thời gian cho vòng lặp vô hạn
         self.last_trade_time = 0
         self.last_close_time = 0
         self.last_position_check = 0
         self.last_error_log_time = 0
         
+        # THÊM: Cooldown period (giây) - thời gian chờ sau khi đóng lệnh
+        self.cooldown_period = 300  # 5 phút
+        
+        # THÊM: Khoảng thời gian kiểm tra vị thế
+        self.position_check_interval = 30  # 30 giây
+        
         # BẢO VỆ CHỐNG LẶP ĐÓNG LỆNH
         self._close_attempted = False
         self._last_close_attempt = 0
-        
-        self.position_check_interval = 60
-        self.cooldown_period = 900
         
         self.coin_manager = CoinManager()
         if symbol:
@@ -791,26 +795,37 @@ class BaseBot:
         raise NotImplementedError("Phương thức get_signal cần được triển khai")
 
     def _run(self):
+        """VÒNG LẶP VÔ HẠN - Bot chạy liên tục tìm kiếm cơ hội"""
         while not self._stop:
             try:
                 current_time = time.time()
                 
+                # Kiểm tra trạng thái vị thế định kỳ
                 if current_time - self.last_position_check > self.position_check_interval:
                     self.check_position_status()
                     self.last_position_check = current_time
                 
-                signal = self.get_signal()
-                
-                if not self.position_open and signal and current_time - self.last_trade_time > 60:
-                    if current_time - self.last_close_time > self.cooldown_period:
+                # CHỈ TÌM TÍN HIỆU KHI KHÔNG CÓ VỊ THẾ ĐANG MỞ
+                if not self.position_open:
+                    signal = self.get_signal()
+                    
+                    # KIỂM TRA ĐIỀU KIỆN VÀO LỆNH
+                    if (signal and 
+                        current_time - self.last_trade_time > 60 and  # Tránh vào lệnh quá nhanh
+                        current_time - self.last_close_time > self.cooldown_period):  # Chờ sau khi đóng lệnh
+                        
                         self.log(f"🎯 Nhận tín hiệu {signal}, đang mở lệnh...")
-                        self.open_position(signal)
-                        self.last_trade_time = current_time
+                        if self.open_position(signal):
+                            self.last_trade_time = current_time
+                        else:
+                            # Nếu mở lệnh thất bại, đợi 30s trước khi thử lại
+                            time.sleep(30)
                 
+                # KIỂM TRA TP/SL KHI CÓ VỊ THẾ
                 if self.position_open and not self._close_attempted:
                     self.check_tp_sl()
                     
-                time.sleep(1)
+                time.sleep(1)  # Giảm tải CPU
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
@@ -853,6 +868,7 @@ class BaseBot:
                 self.last_error_log_time = time.time()
 
     def _reset_position(self):
+        """Reset hoàn toàn trạng thái để sẵn sàng cho lệnh tiếp theo"""
         self.position_open = False
         self.status = "waiting"
         self.side = ""
@@ -860,6 +876,7 @@ class BaseBot:
         self.entry = 0
         self._close_attempted = False
         self._last_close_attempt = 0
+        # GIỮ NGUYÊN last_trade_time và last_close_time
 
     def open_position(self, side):
         try:
@@ -967,7 +984,7 @@ class BaseBot:
                 self.log(message)
                 
                 self._reset_position()
-                self.last_close_time = time.time()
+                self.last_close_time = time.time()  # GHI NHẬN THỜI GIAN ĐÓNG LỆNH
                 return True
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
@@ -1194,6 +1211,11 @@ class BotManager:
         self.start_time = time.time()
         self.user_states = {}
         
+        # THÊM: Theo dõi chiến thuật tự động
+        self.auto_strategies = {}
+        self.last_auto_scan = 0
+        self.auto_scan_interval = 600  # 10 phút
+        
         self.api_key = api_key
         self.api_secret = api_secret
         self.telegram_bot_token = telegram_bot_token
@@ -1205,6 +1227,10 @@ class BotManager:
             
             self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
             self.telegram_thread.start()
+            
+            # THÊM: Thread tự động quét coin
+            self.auto_scan_thread = threading.Thread(target=self._auto_scan_loop, daemon=True)
+            self.auto_scan_thread.start()
             
             if self.telegram_chat_id:
                 self.send_main_menu(self.telegram_chat_id)
@@ -1231,6 +1257,127 @@ class BotManager:
                      bot_token=self.telegram_bot_token, 
                      default_chat_id=self.telegram_chat_id)
 
+    def _auto_scan_loop(self):
+        """VÒNG LẶP TỰ ĐỘNG QUÉT COIN CHO CÁC CHIẾN THUẬT TỰ ĐỘNG"""
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Quét mỗi 10 phút
+                if current_time - self.last_auto_scan > self.auto_scan_interval:
+                    self._scan_auto_strategies()
+                    self.last_auto_scan = current_time
+                
+                time.sleep(60)  # Kiểm tra mỗi phút
+                
+            except Exception as e:
+                self.log(f"❌ Lỗi auto scan: {str(e)}")
+                time.sleep(60)
+
+    def _scan_auto_strategies(self):
+        """Quét và bổ sung coin cho các chiến thuật tự động"""
+        if not self.auto_strategies:
+            return
+            
+        self.log("🔄 Đang quét coin cho chiến thuật tự động...")
+        
+        for strategy_key, strategy_config in self.auto_strategies.items():
+            try:
+                strategy_type = strategy_config['strategy_type']
+                leverage = strategy_config['leverage']
+                percent = strategy_config['percent']
+                tp = strategy_config['tp']
+                sl = strategy_config['sl']
+                
+                # Đếm số bot hiện có cho chiến thuật này
+                current_bots_count = sum(1 for bot_id in self.bots.keys() if strategy_type in bot_id)
+                
+                # Nếu chưa đủ 2 bot, tìm thêm coin
+                if current_bots_count < 2:
+                    self.log(f"🔄 {strategy_type}: đang có {current_bots_count}/2 bot, tìm thêm coin...")
+                    
+                    # Gọi hàm tìm coin với các tham số từ config
+                    if strategy_type == "Reverse 24h":
+                        threshold = strategy_config.get('threshold', 30)
+                        qualified_symbols = get_qualified_symbols(
+                            self.api_key, self.api_secret, strategy_type, leverage,
+                            threshold=threshold, max_candidates=10, final_limit=2
+                        )
+                    elif strategy_type == "Scalping":
+                        volatility = strategy_config.get('volatility', 3)
+                        qualified_symbols = get_qualified_symbols(
+                            self.api_key, self.api_secret, strategy_type, leverage,
+                            volatility=volatility, max_candidates=10, final_limit=2
+                        )
+                    elif strategy_type == "Safe Grid":
+                        grid_levels = strategy_config.get('grid_levels', 5)
+                        qualified_symbols = get_qualified_symbols(
+                            self.api_key, self.api_secret, strategy_type, leverage,
+                            grid_levels=grid_levels, max_candidates=10, final_limit=2
+                        )
+                    elif strategy_type == "Trend Following":
+                        qualified_symbols = get_qualified_symbols(
+                            self.api_key, self.api_secret, strategy_type, leverage,
+                            max_candidates=10, final_limit=2
+                        )
+                    else:
+                        qualified_symbols = []
+                    
+                    # Thêm bot cho các coin mới tìm được
+                    added_count = 0
+                    for symbol in qualified_symbols:
+                        bot_id = f"{symbol}_{strategy_type}"
+                        if bot_id not in self.bots and added_count < (2 - current_bots_count):
+                            success = self._create_auto_bot(symbol, strategy_type, strategy_config)
+                            if success:
+                                added_count += 1
+                                self.log(f"✅ Đã thêm {symbol} cho {strategy_type}")
+                    
+                    if added_count > 0:
+                        self.log(f"🎯 {strategy_type}: đã thêm {added_count} bot mới")
+                    else:
+                        self.log(f"⚠️ {strategy_type}: không tìm thấy coin mới phù hợp")
+                        
+            except Exception as e:
+                self.log(f"❌ Lỗi quét {strategy_type}: {str(e)}")
+
+    def _create_auto_bot(self, symbol, strategy_type, config):
+        """Tạo bot tự động từ config"""
+        try:
+            leverage = config['leverage']
+            percent = config['percent']
+            tp = config['tp']
+            sl = config['sl']
+            
+            if strategy_type == "Reverse 24h":
+                threshold = config.get('threshold', 30)
+                bot = Reverse_24h_Bot(symbol, leverage, percent, tp, sl, self.ws_manager,
+                                   self.api_key, self.api_secret, self.telegram_bot_token, 
+                                   self.telegram_chat_id, threshold)
+            elif strategy_type == "Scalping":
+                bot = Scalping_Bot(symbol, leverage, percent, tp, sl, self.ws_manager,
+                                 self.api_key, self.api_secret, self.telegram_bot_token, 
+                                 self.telegram_chat_id)
+            elif strategy_type == "Safe Grid":
+                grid_levels = config.get('grid_levels', 5)
+                bot = Safe_Grid_Bot(symbol, leverage, percent, tp, sl, self.ws_manager,
+                                 self.api_key, self.api_secret, self.telegram_bot_token, 
+                                 self.telegram_chat_id, grid_levels)
+            elif strategy_type == "Trend Following":
+                bot = Trend_Following_Bot(symbol, leverage, percent, tp, sl, self.ws_manager,
+                                       self.api_key, self.api_secret, self.telegram_bot_token, 
+                                       self.telegram_chat_id)
+            else:
+                return False
+            
+            bot_id = f"{symbol}_{strategy_type}"
+            self.bots[bot_id] = bot
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi tạo bot {symbol}: {str(e)}")
+            return False
+
     def add_bot(self, symbol, lev, percent, tp, sl, strategy_type, **kwargs):
         if sl == 0:
             sl = None
@@ -1246,20 +1393,26 @@ class BotManager:
             
         # CHIẾN LƯỢC TỰ ĐỘNG - 4 CHIẾN LƯỢC
         if strategy_type in ["Reverse 24h", "Scalping", "Safe Grid", "Trend Following"]:
+            # LƯU CẤU HÌNH CHO TỰ ĐỘNG QUÉT
+            strategy_key = f"{strategy_type}_{lev}_{percent}"
+            self.auto_strategies[strategy_key] = {
+                'strategy_type': strategy_type,
+                'leverage': lev,
+                'percent': percent,
+                'tp': tp,
+                'sl': sl,
+                **kwargs
+            }
+            
+            # TÌM COIN VÀ TẠO BOT NGAY LẦN ĐẦU
             threshold = kwargs.get('threshold', 30)
             volatility = kwargs.get('volatility', 3)
             grid_levels = kwargs.get('grid_levels', 5)
             
-            # SỬA: GỌI HÀM TÌM COIN TỪ TOÀN BỘ BINANCE
             qualified_symbols = get_qualified_symbols(
                 self.api_key, self.api_secret, strategy_type, lev,
                 threshold, volatility, grid_levels, max_candidates=20, final_limit=2
             )
-            
-            # QUAN TRỌNG: NẾU KHÔNG TÌM ĐƯỢC COIN, KHÔNG TẠO BOT
-            if not qualified_symbols:
-                self.log(f"⚠️ {strategy_type}: không tìm thấy coin phù hợp, sẽ thử lại sau")
-                return False
             
             success_count = 0
             for symbol in qualified_symbols:
@@ -1267,29 +1420,9 @@ class BotManager:
                 if bot_id in self.bots:
                     continue
                     
-                try:
-                    if strategy_type == "Reverse 24h":
-                        bot = Reverse_24h_Bot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                           self.api_key, self.api_secret, self.telegram_bot_token, 
-                                           self.telegram_chat_id, threshold)
-                    elif strategy_type == "Scalping":
-                        bot = Scalping_Bot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                         self.api_key, self.api_secret, self.telegram_bot_token, 
-                                         self.telegram_chat_id)
-                    elif strategy_type == "Safe Grid":
-                        bot = Safe_Grid_Bot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                         self.api_key, self.api_secret, self.telegram_bot_token, 
-                                         self.telegram_chat_id, grid_levels)
-                    elif strategy_type == "Trend Following":
-                        bot = Trend_Following_Bot(symbol, lev, percent, tp, sl, self.ws_manager,
-                                               self.api_key, self.api_secret, self.telegram_bot_token, 
-                                               self.telegram_chat_id)
-                    
-                    self.bots[bot_id] = bot
+                success = self._create_auto_bot(symbol, strategy_type, self.auto_strategies[strategy_key])
+                if success:
                     success_count += 1
-                    
-                except Exception as e:
-                    self.log(f"❌ Lỗi tạo bot {symbol}: {str(e)}")
             
             if success_count > 0:
                 success_msg = (
@@ -1299,13 +1432,14 @@ class BotManager:
                     f"📊 % Số dư: {percent}%\n"
                     f"🎯 TP: {tp}%\n"
                     f"🛡️ SL: {sl}%\n"
-                    f"🤖 Coin: {', '.join(qualified_symbols[:success_count])}"
+                    f"🤖 Coin: {', '.join(qualified_symbols[:success_count])}\n\n"
+                    f"🔄 <i>Hệ thống sẽ tự động quét thêm coin mỗi 10 phút</i>"
                 )
                 self.log(success_msg)
                 return True
             else:
-                self.log("❌ Không thể tạo bot nào")
-                return False
+                self.log(f"⚠️ {strategy_type}: chưa tìm thấy coin phù hợp, sẽ thử lại sau")
+                return True  # Vẫn trả về True vì đã lưu cấu hình cho auto scan
         
         # CHIẾN LƯỢC THỦ CÔNG - 2 CHIẾN LƯỢC
         else:
@@ -1416,7 +1550,8 @@ class BotManager:
                         user_state['step'] = 'waiting_threshold'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin phù hợp từ TOÀN BỘ Binance\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin phù hợp từ TOÀN BỘ Binance\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
                             f"Chọn ngưỡng biến động (%):",
                             chat_id,
                             create_threshold_keyboard(),
@@ -1426,7 +1561,8 @@ class BotManager:
                         user_state['step'] = 'waiting_volatility'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin biến động nhanh từ TOÀN BỘ Binance\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin biến động nhanh từ TOÀN BỘ Binance\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
                             f"Chọn biến động tối thiểu (%):",
                             chat_id,
                             create_volatility_keyboard(),
@@ -1436,7 +1572,8 @@ class BotManager:
                         user_state['step'] = 'waiting_grid_levels'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin ổn định từ TOÀN BỘ Binance\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin ổn định từ TOÀN BỘ Binance\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
                             f"Chọn số lệnh grid:",
                             chat_id,
                             create_grid_levels_keyboard(),
@@ -1446,7 +1583,8 @@ class BotManager:
                         user_state['step'] = 'waiting_leverage'
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
-                            f"🤖 Bot sẽ tự động tìm coin theo xu hướng từ TOÀN BỘ Binance\n\n"
+                            f"🤖 Bot sẽ tự động tìm coin theo xu hướng từ TOÀN BỘ Binance\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
                             f"Chọn đòn bẩy:",
                             chat_id,
                             create_leverage_keyboard(strategy),
@@ -1842,19 +1980,23 @@ class BotManager:
                 "🎯 <b>Reverse 24h</b> - TỰ ĐỘNG\n"
                 "• Đảo chiều biến động 24h\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
-                "• Ngưỡng biến động: 30-200%\n\n"
+                "• Ngưỡng biến động: 30-200%\n"
+                "• 🔄 Tự quét mỗi 10 phút\n\n"
                 "⚡ <b>Scalping</b> - TỰ ĐỘNG\n"
                 "• Giao dịch tốc độ cao\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
-                "• Biến động tối thiểu: 2-15%\n\n"
+                "• Biến động tối thiểu: 2-15%\n"
+                "• 🔄 Tự quét mỗi 10 phút\n\n"
                 "🛡️ <b>Safe Grid</b> - TỰ ĐỘNG\n"
                 "• Grid an toàn\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
-                "• Số lệnh grid: 3-20\n\n"
+                "• Số lệnh grid: 3-20\n"
+                "• 🔄 Tự quét mỗi 10 phút\n\n"
                 "📈 <b>Trend Following</b> - TỰ ĐỘNG\n"
                 "• Theo xu hướng giá\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
-                "• Biến động vừa phải: 2-8%\n\n"
+                "• Biến động vừa phải: 2-8%\n"
+                "• 🔄 Tự quét mỗi 10 phút\n\n"
                 "🤖 <b>RSI/EMA Recursive</b> - THỦ CÔNG\n"
                 "• Phân tích RSI + EMA đệ quy\n\n"
                 "📊 <b>EMA Crossover</b> - THỦ CÔNG\n"
@@ -1872,6 +2014,7 @@ class BotManager:
                 f"🔑 Binance API: {api_status}\n"
                 f"🤖 Số bot: {len(self.bots)}\n"
                 f"📊 Chiến lược: {len(set(bot.strategy_name for bot in self.bots.values()))}\n"
+                f"🔄 Auto scan: {len(self.auto_strategies)} chiến thuật\n"
                 f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối"
             )
             send_telegram(config_info, chat_id,
