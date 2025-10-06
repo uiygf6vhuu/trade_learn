@@ -632,7 +632,7 @@ def get_24h_change(symbol):
             return float(change) if change is not None else 0.0
         return 0.0
     except Exception as e:
-        logger.error(f"Lỗi lấy biến động 24h cho {symbol}: {str(e)}")
+        logger.error(f"❌ Lỗi lấy biến động 24h cho {symbol}: {str(e)}")
     return 0.0
 
 # ========== CHỈ BÁO KỸ THUẬT ==========
@@ -1291,6 +1291,15 @@ class BotManager:
         self.last_auto_scan = 0
         self.auto_scan_interval = 600  # 10 phút
         
+        # THÊM: Dictionary theo dõi thời gian chờ cho mỗi chiến lược
+        self.strategy_cooldowns = {
+            "Reverse 24h": {},
+            "Scalping": {},
+            "Trend Following": {},
+            "Safe Grid": {}
+        }
+        self.cooldown_period = 300  # 5 phút cooldown
+        
         self.api_key = api_key
         self.api_secret = api_secret
         self.telegram_bot_token = telegram_bot_token
@@ -1298,7 +1307,7 @@ class BotManager:
         
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT ĐA CHIẾN LƯỢC ĐÃ KHỞI ĐỘNG")
+            self.log("🟢 HỆ THỐNG BOT ĐA CHIẾN LƯỢC ĐÃ KHỚI ĐỘNG")
             
             self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
             self.telegram_thread.start()
@@ -1332,17 +1341,24 @@ class BotManager:
                      default_chat_id=self.telegram_chat_id)
 
     def _auto_scan_loop(self):
-        """VÒNG LẶP TỰ ĐỘNG QUÉT COIN CHO CÁC CHIẾN THUẬT TỰ ĐỘNG"""
+        """VÒNG LẶP TỰ ĐỘNG QUÉT COIN CHO CẢ 4 CHIẾN THUẬT TỰ ĐỘNG"""
         while self.running:
             try:
                 current_time = time.time()
                 
-                # BƯỚC 1: DỌN DẸP BOT ĐÃ ĐÓNG LỆNH (ưu tiên cao)
+                # BƯỚC 1: DỌN DẸP BOT ĐÃ ĐÓNG LỆNH (ưu tiên cao) - CHO CẢ 4 CHIẾN LƯỢC
                 removed_count = 0
                 for bot_id in list(self.bots.keys()):
                     bot = self.bots[bot_id]
                     if (hasattr(bot, 'should_be_removed') and bot.should_be_removed and
                         bot.strategy_name in ["Reverse 24h", "Scalping", "Safe Grid", "Trend Following"]):
+                        
+                        # THÊM COOLDOWN cho chiến lược này
+                        strategy_type = bot.strategy_name
+                        config_key = getattr(bot, 'config_key', None)
+                        if config_key:
+                            self.strategy_cooldowns[strategy_type][config_key] = current_time
+                            self.log(f"⏰ Đã thêm cooldown cho {strategy_type} - {config_key}")
                         
                         self.log(f"🔄 Tự động xóa bot {bot_id} (đã đóng lệnh)")
                         self.stop_bot(bot_id)
@@ -1357,7 +1373,7 @@ class BotManager:
                         self.log(f"🗑️ Đã xóa {removed_count} bot, đợi 10s trước khi quét coin mới")
                         time.sleep(10)  # Đợi hệ thống ổn định
                     
-                    self._scan_auto_strategies()
+                    self._scan_all_auto_strategies()
                     self.last_auto_scan = current_time
                 
                 time.sleep(30)
@@ -1366,12 +1382,12 @@ class BotManager:
                 self.log(f"❌ Lỗi auto scan: {str(e)}")
                 time.sleep(30)
 
-    def _scan_auto_strategies(self):
-        """Quét và bổ sung coin cho các chiến thuật tự động - PHÂN BIỆT CẤU HÌNH"""
+    def _scan_all_auto_strategies(self):
+        """Quét và bổ sung coin cho CẢ 4 CHIẾN THUẬT TỰ ĐỘNG - PHÂN BIỆT CẤU HÌNH"""
         if not self.auto_strategies:
             return
             
-        self.log("🔄 Đang quét coin cho các cấu hình tự động...")
+        self.log("🔄 Đang quét coin cho TẤT CẢ cấu hình tự động...")
         
         for strategy_key, strategy_config in self.auto_strategies.items():
             try:
@@ -1380,6 +1396,11 @@ class BotManager:
                 percent = strategy_config['percent']
                 tp = strategy_config['tp']
                 sl = strategy_config['sl']
+                
+                # KIỂM TRA COOLDOWN - QUAN TRỌNG
+                if self._is_in_cooldown(strategy_type, strategy_key):
+                    self.log(f"⏰ {strategy_type} (Config: {strategy_key}): đang trong cooldown, bỏ qua")
+                    continue
                 
                 # Đếm số bot hiện có cho CẤU HÌNH NÀY
                 coin_manager = CoinManager()
@@ -1434,9 +1455,28 @@ class BotManager:
                         self.log(f"🎯 {strategy_type}: đã thêm {added_count} bot mới cho config {strategy_key}")
                     else:
                         self.log(f"⚠️ {strategy_type}: không tìm thấy coin mới phù hợp cho config {strategy_key}")
+                else:
+                    self.log(f"✅ {strategy_type} (Config: {strategy_key}): đã đủ 2 bot, không tìm thêm")
                         
             except Exception as e:
                 self.log(f"❌ Lỗi quét {strategy_type}: {str(e)}")
+
+    def _is_in_cooldown(self, strategy_type, config_key):
+        """Kiểm tra xem chiến lược có đang trong thời gian chờ không"""
+        if strategy_type not in self.strategy_cooldowns:
+            return False
+            
+        last_cooldown_time = self.strategy_cooldowns[strategy_type].get(config_key)
+        if last_cooldown_time is None:
+            return False
+            
+        current_time = time.time()
+        if current_time - last_cooldown_time < self.cooldown_period:
+            return True
+            
+        # Hết cooldown, xóa khỏi danh sách
+        del self.strategy_cooldowns[strategy_type][config_key]
+        return False
 
     def _create_auto_bot(self, symbol, strategy_type, config):
         """Tạo bot tự động từ config - TRUYỀN CONFIG_KEY"""
@@ -1505,6 +1545,11 @@ class BotManager:
                 grid_levels = kwargs.get('grid_levels', 5)
                 strategy_key += f"_grid{grid_levels}"
             
+            # KIỂM TRA COOLDOWN TRƯỚC KHI THÊM
+            if self._is_in_cooldown(strategy_type, strategy_key):
+                self.log(f"⏰ {strategy_type} (Config: {strategy_key}): đang trong cooldown, không thể thêm mới")
+                return False
+            
             # LƯU CẤU HÌNH RIÊNG
             self.auto_strategies[strategy_key] = {
                 'strategy_type': strategy_type,
@@ -1557,7 +1602,8 @@ class BotManager:
                     
                 success_msg += f"🤖 Coin: {', '.join(qualified_symbols[:success_count])}\n\n"
                 success_msg += f"🔑 <b>Config Key:</b> {strategy_key}\n"
-                success_msg += f"🔄 <i>Hệ thống sẽ tự động quét RIÊNG cho cấu hình này</i>"
+                success_msg += f"🔄 <i>Hệ thống sẽ tự động quét RIÊNG cho cấu hình này</i>\n"
+                success_msg += f"⏰ <i>Cooldown: {self.cooldown_period//60} phút sau khi đóng lệnh</i>"
                 
                 self.log(success_msg)
                 return True
@@ -1674,7 +1720,8 @@ class BotManager:
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
                             f"🤖 Bot sẽ tự động tìm coin phù hợp từ TOÀN BỘ Binance\n"
-                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n"
+                            f"⏰ Cooldown: 5 phút sau khi đóng lệnh\n\n"
                             f"Chọn ngưỡng biến động (%):",
                             chat_id,
                             create_threshold_keyboard(),
@@ -1685,7 +1732,8 @@ class BotManager:
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
                             f"🤖 Bot sẽ tự động tìm coin biến động nhanh từ TOÀN BỘ Binance\n"
-                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n"
+                            f"⏰ Cooldown: 5 phút sau khi đóng lệnh\n\n"
                             f"Chọn biến động tối thiểu (%):",
                             chat_id,
                             create_volatility_keyboard(),
@@ -1696,7 +1744,8 @@ class BotManager:
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
                             f"🤖 Bot sẽ tự động tìm coin ổn định từ TOÀN BỘ Binance\n"
-                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n"
+                            f"⏰ Cooldown: 5 phút sau khi đóng lệnh\n\n"
                             f"Chọn số lệnh grid:",
                             chat_id,
                             create_grid_levels_keyboard(),
@@ -1707,7 +1756,8 @@ class BotManager:
                         send_telegram(
                             f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n\n"
                             f"🤖 Bot sẽ tự động tìm coin theo xu hướng từ TOÀN BỘ Binance\n"
-                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n\n"
+                            f"🔄 Sẽ quét lại mỗi 10 phút nếu chưa đủ 2 coin\n"
+                            f"⏰ Cooldown: 5 phút sau khi đóng lệnh\n\n"
                             f"Chọn đòn bẩy:",
                             chat_id,
                             create_leverage_keyboard(strategy),
@@ -2100,22 +2150,26 @@ class BotManager:
                 "• Đảo chiều biến động 24h\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Ngưỡng biến động: 30-200%\n"
-                "• 🔄 Tự quét mỗi 10 phút\n\n"
+                "• 🔄 Tự quét mỗi 10 phút\n"
+                "• ⏰ Cooldown: 5 phút\n\n"
                 "⚡ <b>Scalping</b> - TỰ ĐỘNG\n"
                 "• Giao dịch tốc độ cao\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Biến động tối thiểu: 2-15%\n"
-                "• 🔄 Tự quét mỗi 10 phút\n\n"
+                "• 🔄 Tự quét mỗi 10 phút\n"
+                "• ⏰ Cooldown: 5 phút\n\n"
                 "🛡️ <b>Safe Grid</b> - TỰ ĐỘNG\n"
                 "• Grid an toàn\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Số lệnh grid: 3-20\n"
-                "• 🔄 Tự quét mỗi 10 phút\n\n"
+                "• 🔄 Tự quét mỗi 10 phút\n"
+                "• ⏰ Cooldown: 5 phút\n\n"
                 "📈 <b>Trend Following</b> - TỰ ĐỘNG\n"
                 "• Theo xu hướng giá\n"
                 "• Tự tìm coin từ TOÀN BỘ Binance\n"
                 "• Biến động vừa phải: 2-8%\n"
-                "• 🔄 Tự quét mỗi 10 phút\n\n"
+                "• 🔄 Tự quét mỗi 10 phút\n"
+                "• ⏰ Cooldown: 5 phút\n\n"
                 "🤖 <b>RSI/EMA Recursive</b> - THỦ CÔNG\n"
                 "• Phân tích RSI + EMA đệ quy\n\n"
                 "📊 <b>EMA Crossover</b> - THỦ CÔNG\n"
@@ -2134,7 +2188,8 @@ class BotManager:
                 f"🤖 Số bot: {len(self.bots)}\n"
                 f"📊 Chiến lược: {len(set(bot.strategy_name for bot in self.bots.values()))}\n"
                 f"🔄 Auto scan: {len(self.auto_strategies)} cấu hình\n"
-                f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối"
+                f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối\n"
+                f"⏰ Cooldown: {self.cooldown_period//60} phút"
             )
             send_telegram(config_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
