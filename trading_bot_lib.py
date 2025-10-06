@@ -826,16 +826,67 @@ class BaseBot:
     def get_signal(self):
         raise NotImplementedError("Phương thức get_signal cần được triển khai")
 
+    def check_position_status(self):
+        try:
+            positions = get_positions(self.symbol, self.api_key, self.api_secret)
+            if not positions:
+                self._reset_position()
+                return
+            
+            position_found = False
+            for pos in positions:
+                if pos['symbol'] == self.symbol:
+                    position_amt = float(pos.get('positionAmt', 0))
+                    if abs(position_amt) > 0:
+                        # ĐÃ TÌM THẤY VỊ THẾ
+                        position_found = True
+                        self.position_open = True
+                        self.status = "open"
+                        self.side = "BUY" if position_amt > 0 else "SELL"
+                        self.qty = position_amt
+                        self.entry = float(pos.get('entryPrice', 0))
+                        break
+                    else:
+                        # VỊ THẾ ĐÃ ĐÓNG
+                        position_found = True
+                        self._reset_position()
+                        break
+            
+            # NẾU KHÔNG TÌM THẤY VỊ THẾ CHO SYMBOL NÀY
+            if not position_found:
+                self._reset_position()
+                
+        except Exception as e:
+            if time.time() - self.last_error_log_time > 10:
+                self.log(f"❌ Lỗi kiểm tra vị thế: {str(e)}")
+                self.last_error_log_time = time.time()
+
+    def _reset_position(self):
+        """Reset hoàn toàn trạng thái để sẵn sàng cho lệnh tiếp theo"""
+        self.position_open = False
+        self.status = "waiting"
+        self.side = ""
+        self.qty = 0
+        self.entry = 0
+        self._close_attempted = False
+        self._last_close_attempt = 0
+
     def _run(self):
         """VÒNG LẶP VÔ HẠN - Bot chạy liên tục tìm kiếm cơ hội"""
         while not self._stop:
             try:
                 current_time = time.time()
                 
-                # Kiểm tra trạng thái vị thế định kỳ
+                # KIỂM TRA TRẠNG THÁI VỊ THẾ ĐỊNH KỲ - QUAN TRỌNG
                 if current_time - self.last_position_check > self.position_check_interval:
                     self.check_position_status()
                     self.last_position_check = current_time
+                
+                # NẾU BOT ĐƯỢC ĐÁNH DẤU XÓA, DỪNG HOẠT ĐỘNG
+                if self.should_be_removed:
+                    self.log("🛑 Bot đã được đánh dấu xóa, dừng hoạt động")
+                    time.sleep(1)
+                    continue
                 
                 # CHỈ TÌM TÍN HIỆU KHI KHÔNG CÓ VỊ THẾ ĐANG MỞ
                 if not self.position_open:
@@ -844,7 +895,8 @@ class BaseBot:
                     # KIỂM TRA ĐIỀU KIỆN VÀO LỆNH
                     if (signal and 
                         current_time - self.last_trade_time > 60 and  # Tránh vào lệnh quá nhanh
-                        current_time - self.last_close_time > self.cooldown_period):  # Chờ sau khi đóng lệnh
+                        current_time - self.last_close_time > self.cooldown_period and  # Chờ sau khi đóng lệnh
+                        not self.should_be_removed):  # Đảm bảo bot không bị đánh dấu xóa
                         
                         self.log(f"🎯 Nhận tín hiệu {signal}, đang mở lệnh...")
                         if self.open_position(signal):
@@ -854,7 +906,7 @@ class BaseBot:
                             time.sleep(30)
                 
                 # KIỂM TRA TP/SL KHI CÓ VỊ THẾ
-                if self.position_open and not self._close_attempted:
+                if self.position_open and not self._close_attempted and not self.should_be_removed:
                     self.check_tp_sl()
                     
                 time.sleep(1)  # Giảm tải CPU
@@ -872,48 +924,17 @@ class BaseBot:
         cancel_all_orders(self.symbol, self.api_key, self.api_secret)
         self.log(f"🔴 Bot dừng cho {self.symbol}")
 
-    def check_position_status(self):
-        try:
-            positions = get_positions(self.symbol, self.api_key, self.api_secret)
-            if not positions:
-                self._reset_position()
-                return
-            
-            for pos in positions:
-                if pos['symbol'] == self.symbol:
-                    position_amt = float(pos.get('positionAmt', 0))
-                    if abs(position_amt) > 0:
-                        self.position_open = True
-                        self.status = "open"
-                        self.side = "BUY" if position_amt > 0 else "SELL"
-                        self.qty = position_amt
-                        self.entry = float(pos.get('entryPrice', 0))
-                        return
-                    else:
-                        self._reset_position()
-                        return
-            self._reset_position()
-            
-        except Exception as e:
-            if time.time() - self.last_error_log_time > 10:
-                self.log(f"❌ Lỗi kiểm tra vị thế: {str(e)}")
-                self.last_error_log_time = time.time()
-
-    def _reset_position(self):
-        """Reset hoàn toàn trạng thái để sẵn sàng cho lệnh tiếp theo"""
-        self.position_open = False
-        self.status = "waiting"
-        self.side = ""
-        self.qty = 0
-        self.entry = 0
-        self._close_attempted = False
-        self._last_close_attempt = 0
-
     def open_position(self, side):
         try:
+            # KIỂM TRA KỸ TRƯỚC KHI MỞ LỆNH
             self.check_position_status()
             if self.position_open:
-                self.log(f"⚠️ Đã có vị thế {self.side}, bỏ qua")
+                self.log(f"⚠️ Đã có vị thế {self.side}, bỏ qua tín hiệu {side}")
+                return False
+
+            # KIỂM TRA BOT CÓ BỊ ĐÁNH DẤU XÓA KHÔNG
+            if self.should_be_removed:
+                self.log("⚠️ Bot đã được đánh dấu xóa, không mở lệnh mới")
                 return False
 
             if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
@@ -980,12 +1001,17 @@ class BaseBot:
 
     def close_position(self, reason=""):
         try:
+            # KIỂM TRA LẠI TRẠNG THÁI VỊ THẾ TRƯỚC KHI ĐÓNG
+            self.check_position_status()
+            
             if not self.position_open or abs(self.qty) <= 0:
+                self.log(f"⚠️ Không có vị thế để đóng: {reason}")
                 return False
 
-            # CHỈ ĐƯỢC ĐÓNG 1 LẦN
+            # CHỈ ĐƯỢC ĐÓNG 1 LẦN - KIỂM TRA KỸ HƠN
             current_time = time.time()
-            if self._close_attempted and current_time - self._last_close_attempt < 10:
+            if self._close_attempted and current_time - self._last_close_attempt < 30:  # Tăng thời gian chờ
+                self.log(f"⚠️ Đang thử đóng lệnh lần trước, chờ...")
                 return False
             
             self._close_attempted = True
@@ -993,6 +1019,10 @@ class BaseBot:
 
             close_side = "SELL" if self.side == "BUY" else "BUY"
             close_qty = abs(self.qty)
+            
+            # HỦY TẤT CẢ LỆNH CHỜ TRƯỚC KHI ĐÓNG
+            cancel_all_orders(self.symbol, self.api_key, self.api_secret)
+            time.sleep(0.5)  # Chờ hủy lệnh
             
             result = place_order(self.symbol, close_side, close_qty, self.api_key, self.api_secret)
             if result and 'orderId' in result:
@@ -1017,16 +1047,26 @@ class BaseBot:
                 # QUAN TRỌNG: ĐÁNH DẤU ĐỂ BOT MANAGER XÓA BOT NÀY
                 self.should_be_removed = True
                 
+                # RESET HOÀN TOÀN TRẠNG THÁI
                 self._reset_position()
                 self.last_close_time = time.time()
+                
+                # KIỂM TRA LẠI SAU KHI ĐÓNG
+                time.sleep(2)
+                self.check_position_status()
+                
                 return True
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
                 self.log(f"❌ Lỗi đóng lệnh: {error_msg}")
+                
+                # NẾU LỖI, RESET TRẠNG THÁI ĐÓNG
+                self._close_attempted = False
                 return False
                 
         except Exception as e:
             self.log(f"❌ Lỗi đóng lệnh: {str(e)}")
+            self._close_attempted = False
             return False
 
     def check_tp_sl(self):
@@ -1307,13 +1347,15 @@ class BotManager:
                         self.log(f"🔄 Tự động xóa bot {bot_id} (đã đóng lệnh)")
                         self.stop_bot(bot_id)
                         removed_count += 1
-                
-                if removed_count > 0:
-                    self.log(f"🗑️ Đã xóa {removed_count} bot đóng lệnh, chuẩn bị tìm coin mới")
+                        time.sleep(0.5)  # Thêm delay giữa các lần xóa
                 
                 # BƯỚC 2: Quét tìm coin mới mỗi 10 phút HOẶC ngay sau khi xóa bot
                 if (removed_count > 0 or 
                     current_time - self.last_auto_scan > self.auto_scan_interval):
+                    
+                    if removed_count > 0:
+                        self.log(f"🗑️ Đã xóa {removed_count} bot, đợi 10s trước khi quét coin mới")
+                        time.sleep(10)  # Đợi hệ thống ổn định
                     
                     self._scan_auto_strategies()
                     self.last_auto_scan = current_time
