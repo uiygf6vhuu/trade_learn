@@ -1,5 +1,5 @@
 # main.py
-from trading_bot_lib import BotMTradinganager
+from trading_bot_lib import TradingBotManager
 import os
 import json
 import time
@@ -33,7 +33,7 @@ def main():
     print("🟢 Đang khởi động hệ thống bot...")
     
     # Khởi tạo hệ thống
-    manager = BotMTradinganager(
+    manager = TradingBotManager(
         api_key=BINANCE_API_KEY,
         api_secret=BINANCE_SECRET_KEY,
         telegram_bot_token=TELEGRAM_BOT_TOKEN,
@@ -70,5 +70,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
