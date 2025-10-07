@@ -1,5 +1,5 @@
 # main.py
-from trading_bot_lib import BotManager
+from trading_bot_lib import TradingBotManager
 import os
 import json
 import time
@@ -70,3 +70,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
