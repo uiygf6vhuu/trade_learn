@@ -1215,7 +1215,7 @@ class BaseBot:
                 executed_qty = float(result.get('executedQty', 0))
                 avg_price = float(result.get('avgPrice', current_price))
                 
-                if executed_qty => 0:
+                if executed_qty >= 0:
                     self.entry = avg_price
                     self.side = side
                     self.qty = executed_qty if side == "BUY" else -executed_qty
