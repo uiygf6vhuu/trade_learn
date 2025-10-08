@@ -538,7 +538,7 @@ def get_top_volatile_symbols(limit=10, threshold=20):
                     change = float(ticker.get('priceChangePercent', 0))
                     volume = float(ticker.get('quoteVolume', 0))
                     
-                    if abs(change) >= threshold and volume > 1000000:
+                    if abs(change) >= threshold and #volume > 1000000:
                         volatile_pairs.append((symbol, abs(change)))
                 except (ValueError, TypeError):
                     continue
@@ -1136,18 +1136,12 @@ class BaseBot:
                     self.check_position_status()
                     self.last_position_check = current_time
                 
-                if self.should_be_removed:
-                    self.log("🛑 Bot đã được đánh dấu xóa, dừng hoạt động")
-                    time.sleep(1)
-                    continue
-                
                 if not self.position_open:
                     signal = self.get_signal()
                     
                     if (signal and 
                         current_time - self.last_trade_time > 60 and
-                        current_time - self.last_close_time > self.cooldown_period and
-                        not self.should_be_removed):
+                        current_time - self.last_close_time > self.cooldown_period):
                         
                         self.log(f"🎯 Nhận tín hiệu {signal}, đang mở lệnh...")
                         if self.open_position(signal):
@@ -1155,7 +1149,7 @@ class BaseBot:
                         else:
                             time.sleep(30)
                 
-                if self.position_open and not self._close_attempted and not self.should_be_removed:
+                if self.position_open and not self._close_attempted:
                     self.check_tp_sl()
                     
                 time.sleep(1)
@@ -1293,6 +1287,7 @@ class BaseBot:
                 
                 # BOT ĐỘNG: TÌM COIN MỚI SAU KHI ĐÓNG LỆNH
                 if hasattr(self, 'config_key') and self.config_key:
+                    self.
                     self._find_new_coin_after_close()
                 
                 self._reset_position()
@@ -1316,7 +1311,7 @@ class BaseBot:
     def _find_new_coin_after_close(self):
         """BOT ĐỘNG: TÌM COIN MỚI SAU KHI ĐÓNG LỆNH"""
         try:
-            self.log(f"🔄 Bot động đang tìm coin mới thay thế {self.symbol}...")
+            #self.log(f"🔄 Bot động đang tìm coin mới thay thế {self.symbol}...")
             
             # Tìm coin mới phù hợp
             new_symbols = get_qualified_symbols(
@@ -1333,7 +1328,7 @@ class BaseBot:
                 new_symbol = new_symbols[0]
                 
                 if new_symbol != self.symbol:
-                    self.log(f"🔄 Chuyển từ {self.symbol} → {new_symbol}")
+                    #self.log(f"🔄 Chuyển từ {self.symbol} → {new_symbol}")
                     
                     # Hủy đăng ký coin cũ
                     self.coin_manager.unregister_coin(self.symbol)
@@ -1352,7 +1347,7 @@ class BaseBot:
                     self.log(f"✅ Đã chuyển sang coin mới: {self.symbol}")
                     return True
                 else:
-                    self.log(f"ℹ️ Vẫn giữ coin {self.symbol} (phù hợp nhất)")
+                    #self.log(f"ℹ️ Vẫn giữ coin {self.symbol} (phù hợp nhất)")
             else:
                 self.log(f"⚠️ Không tìm thấy coin mới phù hợp, giữ {self.symbol}")
             
