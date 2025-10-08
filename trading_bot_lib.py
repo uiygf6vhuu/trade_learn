@@ -1914,8 +1914,8 @@ class BotManager:
         smart_exit_config = kwargs.get('smart_exit_config', {})
         bot_mode = kwargs.get('bot_mode', 'static')  # static or dynamic
         
-        # BOT ĐỘNG THÔNG MINH
-        if strategy_type == "Smart Dynamic" or bot_mode == 'dynamic':
+        # BOT ĐỘNG THÔNG MINH - CHỈ KHI CHỌN ĐÚNG CHIẾN LƯỢC SMART DYNAMIC
+        if strategy_type == "Smart Dynamic":
             strategy_key = f"SmartDynamic_{lev}_{percent}_{tp}_{sl}"
             
             # KIỂM TRA COOLDOWN TRƯỚC KHI THÊM
@@ -1963,8 +1963,8 @@ class BotManager:
                 self.log("⚠️ Smart Dynamic: chưa tìm thấy coin phù hợp, sẽ thử lại sau")
                 return True
         
-        # CHIẾN LƯỢC TỰ ĐỘNG KHÁC
-        elif strategy_type in ["Reverse 24h", "Scalping", "Safe Grid", "Trend Following"]:
+        # CÁC CHIẾN LƯỢC ĐỘNG KHÁC - KHI CHỌN BOT ĐỘNG VỚI CHIẾN LƯỢC CỤ THỂ
+        elif bot_mode == 'dynamic' and strategy_type in ["Reverse 24h", "Scalping", "Safe Grid", "Trend Following"]:
             strategy_key = f"{strategy_type}_{lev}_{percent}_{tp}_{sl}"
             
             # Thêm tham số đặc biệt
