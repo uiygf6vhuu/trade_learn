@@ -538,7 +538,7 @@ def get_top_volatile_symbols(limit=10, threshold=20):
                     change = float(ticker.get('priceChangePercent', 0))
                     volume = float(ticker.get('quoteVolume', 0))
                     
-                    if abs(change) >= threshold '''and volume > 1000000''':
+                    if abs(change) >= threshold: # and volume > 1000000:
                         volatile_pairs.append((symbol, abs(change)))
                 except (ValueError, TypeError):
                     continue
@@ -605,7 +605,7 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 
                 # ĐIỀU KIỆN CHO TỪNG CHIẾN LƯỢC - LINH HOẠT HƠN
                 if strategy_type == "Reverse 24h":
-                    if abs_price_change >= (threshold or 15) and volume > 1000000:
+                    if abs_price_change >= (threshold or 15):# and volume > 1000000:
                         score = abs_price_change * (volume / 1000000)
                         qualified_symbols.append((symbol, score, price_change))
                 
@@ -614,13 +614,13 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                         qualified_symbols.append((symbol, price_range))
                 
                 elif strategy_type == "Safe Grid":
-                    if 0.5 <= abs_price_change <= 8.0 and volume > 500000:
+                    if 0.5 <= abs_price_change <= 8.0: # and volume > 500000:
                         qualified_symbols.append((symbol, -abs(price_change - 3.0)))
                 
                 elif strategy_type == "Trend Following":
                     # ĐIỀU KIỆN MỞ RỘNG CHO TREND FOLLOWING
                     if (1.0 <= abs_price_change <= 15.0 and 
-                        volume > 1000000 and 
+                        # volume > 1000000 and 
                         price_range >= 0.5):
                         score = volume * abs_price_change  # Ưu tiên volume cao + biến động
                         qualified_symbols.append((symbol, score))
@@ -628,7 +628,7 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                 elif strategy_type == "Smart Dynamic":
                     # ĐIỀU KIỆN THÔNG MINH LINH HOẠT
                     if (1.0 <= abs_price_change <= 12.0 and
-                        volume > 1500000 and
+                        #volume > 1500000 and
                         price_range >= 0.8):
                         # Tính điểm tổng hợp
                         volume_score = min(volume / 5000000, 5)
@@ -699,7 +699,7 @@ def get_qualified_symbols(api_key, api_secret, strategy_type, leverage, threshol
                     abs_price_change = abs(price_change)
                     
                     # Điều kiện backup: volume cao, biến động vừa phải, không quá mạnh
-                    if (volume > 3000000 and 
+                    if (#volume > 3000000 and 
                         0.5 <= abs_price_change <= 10.0 and
                         symbol not in ['BTCUSDT', 'ETHUSDT']):
                         backup_symbols.append((symbol, volume, abs_price_change))
