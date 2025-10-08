@@ -538,7 +538,7 @@ def get_top_volatile_symbols(limit=10, threshold=20):
                     change = float(ticker.get('priceChangePercent', 0))
                     volume = float(ticker.get('quoteVolume', 0))
                     
-                    if abs(change) >= threshold and #volume > 1000000:
+                    if abs(change) >= threshold '''and volume > 1000000''':
                         volatile_pairs.append((symbol, abs(change)))
                 except (ValueError, TypeError):
                     continue
