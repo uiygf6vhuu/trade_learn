@@ -1346,7 +1346,7 @@ class BaseBot:
                     self.log(f"✅ Đã chuyển sang coin mới: {self.symbol}")
                     return True
                 else:
-                    #self.log(f"ℹ️ Vẫn giữ coin {self.symbol} (phù hợp nhất)")
+                    self.log(f"ℹ️ Vẫn giữ coin {self.symbol} (phù hợp nhất)")
             else:
                 self.log(f"⚠️ Không tìm thấy coin mới phù hợp, giữ {self.symbol}")
             
