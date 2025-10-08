@@ -1287,7 +1287,6 @@ class BaseBot:
                 
                 # BOT ĐỘNG: TÌM COIN MỚI SAU KHI ĐÓNG LỆNH
                 if hasattr(self, 'config_key') and self.config_key:
-                    self.
                     self._find_new_coin_after_close()
                 
                 self._reset_position()
