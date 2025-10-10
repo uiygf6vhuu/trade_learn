@@ -862,6 +862,9 @@ class BaseBot:
         # Biến theo dõi thời gian
         self.last_trade_time = 0
         self.last_close_time = 0
+        # Biến theo dõi tìm coin
+        self._last_find_attempt = 0
+        self._find_coin_cooldown = 300  # 5 phút
         self.last_position_check = 0
         self.last_error_log_time = 0
         
@@ -1578,33 +1581,37 @@ class BotManager:
         return False
 
     def _auto_scan_loop(self):
-        """VÒNG LẶP TỰ ĐỘNG QUÉT COIN VỚI COOLDOWN"""
+        """VÒNG LẶP TỰ ĐỘNG QUÉT COIN VỚI COOLDOWN - ĐÃ SỬA"""
         while self.running:
             try:
                 current_time = time.time()
                 
-                # KIỂM TRA BOT ĐỘNG CẦN TÌM COIN MỚI
+                # CHỈ KIỂM TRA BOT ĐỘNG KHI CÓ VỊ THẾ ĐÓNG GẦN ĐÂY - QUAN TRỌNG
                 for bot_id, bot in list(self.bots.items()):
                     if (hasattr(bot, 'config_key') and bot.config_key and
                         not bot.position_open and 
+                        current_time - bot.last_close_time < 300 and  # CHỈ 5 PHÚT SAU KHI ĐÓNG
                         bot.strategy_name in ["Reverse 24h", "Scalping", "Safe Grid", "Trend Following", "Smart Dynamic"]):
                         
-                        # Bot động đang chờ, tìm coin mới
-                        self.log(f"🔄 Bot động {bot_id} đang tìm coin mới...")
-                        bot._find_new_coin_after_close()
+                        # KIỂM TRA COOLDOWN - QUAN TRỌNG
+                        if current_time - getattr(bot, '_last_find_attempt', 0) > 300:  # 5 phút cooldown
+                            self.log(f"🔄 Bot động {bot_id} đang tìm coin mới sau khi đóng lệnh...")
+                            bot._last_find_attempt = current_time
+                            bot._find_new_coin_after_close()
                 
                 if current_time - self.last_auto_scan > self.auto_scan_interval:
                     self._scan_auto_strategies()
                     self.last_auto_scan = current_time
                 
-                time.sleep(30)
+                time.sleep(60)  # Tăng thời gian chờ lên 60s
                 
             except Exception as e:
                 self.log(f"❌ Lỗi auto scan: {str(e)}")
-                time.sleep(30)
+                time.sleep(60)
+    
 
     def _scan_auto_strategies(self):
-        """Quét và bổ sung coin cho các chiến thuật tự động - CHỈ KHI CHƯA ĐỦ 2 COIN"""
+        """Quét và bổ sung coin cho các chiến thuật tự động - CHỈ KHI CHƯA ĐỦ 2 COIN - ĐÃ SỬA"""
         if not self.auto_strategies:
             return
             
@@ -1613,66 +1620,109 @@ class BotManager:
         for strategy_key, strategy_config in self.auto_strategies.items():
             try:
                 strategy_type = strategy_config['strategy_type']
-                leverage = strategy_config['leverage']
-                percent = strategy_config['percent']
-                tp = strategy_config['tp']
-                sl = strategy_config['sl']
                 
                 # KIỂM TRA COOLDOWN - QUAN TRỌNG
                 if self._is_in_cooldown(strategy_type, strategy_key):
-                    self.log(f"⏰ {strategy_type} (Config: {strategy_key}): đang trong cooldown, bỏ qua")
                     continue
                 
                 coin_manager = CoinManager()
                 current_bots_count = coin_manager.count_bots_by_config(strategy_key)
                 
-                # CHỈ BACKUP KHI CHƯA ĐỦ 2 COIN
-                if current_bots_count < 2:
-                    self.log(f"🔄 {strategy_type} (Config: {strategy_key}): đang có {current_bots_count}/2 bot, tìm thêm coin...")
+                # CHỈ BACKUP KHI CHƯA CÓ COIN NÀO
+                if current_bots_count == 0:
+                    self.log(f"🔄 {strategy_type} (Config: {strategy_key}): đang có 0 bot, tìm coin...")
                     
-                    qualified_symbols = self._find_qualified_symbols(strategy_type, leverage, strategy_config, strategy_key)
+                    qualified_symbols = self._find_qualified_symbols(strategy_type, 
+                                                                   strategy_config['leverage'], 
+                                                                   strategy_config, strategy_key)
                     
                     added_count = 0
                     for symbol in qualified_symbols:
+                        if added_count >= 2:  # TỐI ĐA 2 COIN
+                            break
                         bot_id = f"{symbol}_{strategy_key}"
-                        if bot_id not in self.bots and added_count < (2 - current_bots_count):
+                        if bot_id not in self.bots:
                             success = self._create_auto_bot(symbol, strategy_type, strategy_config)
                             if success:
                                 added_count += 1
-                                self.log(f"✅ Đã thêm {symbol} cho {strategy_type} (Config: {strategy_key})")
+                                self.log(f"✅ Đã thêm {symbol} cho {strategy_type}")
                     
                     if added_count > 0:
-                        self.log(f"🎯 {strategy_type}: đã thêm {added_count} bot mới cho config {strategy_key}")
+                        self.log(f"🎯 {strategy_type}: đã thêm {added_count} bot mới")
                     else:
-                        self.log(f"⚠️ {strategy_type}: không tìm thấy coin mới phù hợp cho config {strategy_key}")
+                        self.log(f"⚠️ {strategy_type}: không tìm thấy coin phù hợp")
                 else:
-                    # ĐÃ ĐỦ 2 COIN, KHÔNG BACKUP
-                    self.log(f"✅ {strategy_type} (Config: {strategy_key}): đã đủ 2 bot, không backup")
+                    # ĐÃ CÓ COIN, KHÔNG BACKUP
+                    self.log(f"✅ {strategy_type} (Config: {strategy_key}): đang có {current_bots_count} bot, không backup")
                         
             except Exception as e:
                 self.log(f"❌ Lỗi quét {strategy_type}: {str(e)}")
-
-    def _find_qualified_symbols(self, strategy_type, leverage, config, strategy_key):
-        """Tìm coin phù hợp cho chiến lược"""
+    def _find_new_coin_after_close(self):
+        """BOT ĐỘNG: TÌM COIN MỚI SAU KHI ĐÓNG LỆNH - ĐÃ SỬA"""
         try:
-            threshold = config.get('threshold', 30)
-            volatility = config.get('volatility', 3)
-            grid_levels = config.get('grid_levels', 5)
+            # KIỂM TRA COOLDOWN - QUAN TRỌNG
+            current_time = time.time()
+            if hasattr(self, '_last_find_attempt') and current_time - self._last_find_attempt < 300:
+                return False
+                
+            self._last_find_attempt = current_time
             
-            qualified_symbols = get_qualified_symbols(
-                self.api_key, self.api_secret, strategy_type, leverage,
-                threshold, volatility, grid_levels, 
-                max_candidates=20, 
-                final_limit=2,
-                strategy_key=strategy_key
+            self.log(f"🔄 Bot động đang tìm coin mới thay thế {self.symbol}...")
+            
+            # ĐẢM BẢO CHỈ TÌM KHI CHƯA ĐỦ 2 COIN CHO CONFIG
+            coin_manager = CoinManager()
+            current_count = coin_manager.get_config_coin_count(self.config_key)
+            
+            if current_count >= 2:
+                self.log(f"⚠️ Đã đủ 2 coin cho config {self.config_key}, không tìm thêm")
+                return False
+            
+            # Tìm coin mới phù hợp
+            new_symbols = get_qualified_symbols(
+                self.api_key, self.api_secret,
+                self.strategy_name, self.lev,
+                getattr(self, 'threshold', None),
+                getattr(self, 'volatility', None),
+                getattr(self, 'grid_levels', None),
+                max_candidates=5, final_limit=1,  # Giảm số lượng tìm kiếm
+                strategy_key=self.config_key
             )
             
-            return qualified_symbols
+            if new_symbols:
+                new_symbol = new_symbols[0]
+                
+                if new_symbol != self.symbol:
+                    self.log(f"🔄 Chuyển từ {self.symbol} → {new_symbol}")
+                    
+                    # Cập nhật symbol mới
+                    old_symbol = self.symbol
+                    self.symbol = new_symbol
+                    
+                    # Đăng ký coin mới
+                    success = self._register_coin_with_retry(self.symbol)
+                    if not success:
+                        self.log(f"❌ Không thể đăng ký coin mới {self.symbol}")
+                        # KHÔI PHỤC LẠI SYMBOL CŨ
+                        self.symbol = old_symbol
+                        self._register_coin_with_retry(self.symbol)
+                        return False
+                    
+                    # Khởi động lại WebSocket với coin mới
+                    self.ws_manager.remove_symbol(old_symbol)
+                    self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+                    
+                    self.log(f"✅ Đã chuyển sang coin mới: {self.symbol}")
+                    return True
+                else:
+                    self.log(f"ℹ️ Vẫn giữ coin {self.symbol} (phù hợp nhất)")
+            else:
+                self.log(f"⚠️ Không tìm thấy coin mới phù hợp, giữ {self.symbol}")
+            
+            return False
             
         except Exception as e:
-            self.log(f"❌ Lỗi tìm coin: {str(e)}")
-            return []
-
+            self.log(f"❌ Lỗi tìm coin mới: {str(e)}")
+            return False
     def _create_auto_bot(self, symbol, strategy_type, config):
         """Tạo bot tự động"""
         try:
