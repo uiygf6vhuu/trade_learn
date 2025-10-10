@@ -1637,7 +1637,7 @@ class BotManager:
             return []
 
     def _create_all_bots_from_target_list(self, strategy_key):
-        """Tạo bot cho tất cả coin trong danh sách target"""
+        """Tạo bot cho tất cả coin trong danh sách target - ĐẢM BẢO TẠO MỚI"""
         try:
             if strategy_key not in self.target_coins or not self.target_coins[strategy_key]:
                 return False
@@ -1648,33 +1648,29 @@ class BotManager:
             
             created_count = 0
             max_bots = self.max_bots_per_config.get(strategy_key, 2)
-            current_bots = [bot_id for bot_id in self.bots.keys() if strategy_key in bot_id]
-            
-            if len(current_bots) >= max_bots:
-                return True
             
             for symbol in self.target_coins[strategy_key]:
-                if len(current_bots) >= max_bots:
+                if created_count >= max_bots:
                     break
                     
                 bot_id = f"{symbol}_{strategy_key}"
+                
+                # CHỈ TẠO BOT NẾU CHƯA TỒN TẠI
                 if bot_id not in self.bots:
                     strategy_type = strategy_config['strategy_type']
                     success = self._create_auto_bot(symbol, strategy_type, strategy_config)
                     if success:
-                        current_bots.append(bot_id)
                         created_count += 1
                         logger.info(f"✅ Đã tạo bot {bot_id} từ danh sách target")
             
             if created_count > 0:
-                logger.info(f"🎯 Đã tạo {created_count} bot cho {strategy_key}")
+                logger.info(f"🎯 Đã tạo {created_count} bot mới cho {strategy_key}")
             
             return created_count > 0
                 
         except Exception as e:
             logger.error(f"❌ Lỗi tạo bot từ target list: {str(e)}")
             return False
-
     def _scan_auto_strategies(self):
         """Quét và bổ sung coin cho các chiến thuật tự động"""
         if not self.auto_strategies:
@@ -1722,25 +1718,32 @@ class BotManager:
                 self.log(f"❌ Lỗi quét {strategy_type}: {str(e)}")
 
     def _handle_coin_after_close(self, strategy_key, closed_symbol):
-        """Xử lý khi một bot đóng lệnh - TÌM COIN MỚI CHO DANH SÁCH TARGET"""
+        """Xử lý khi một bot đóng lệnh - XÓA COIN CŨ VÀ TÌM COIN MỚI CHO DANH SÁCH TARGET"""
         try:
             if strategy_key not in self.target_coins:
                 self.target_coins[strategy_key] = []
             
-            # Xóa coin đã đóng khỏi danh sách target
+            # XÓA COIN ĐÃ ĐÓNG KHỎI DANH SÁCH TARGET
             if closed_symbol in self.target_coins[strategy_key]:
                 self.target_coins[strategy_key].remove(closed_symbol)
                 self.log(f"🗑️ Đã xóa {closed_symbol} khỏi danh sách target {strategy_key}")
+            
+            # ĐẢM BẢO DỪNG VÀ XÓA BOT CŨ
+            bot_id_to_remove = f"{closed_symbol}_{strategy_key}"
+            if bot_id_to_remove in self.bots:
+                self.stop_bot(bot_id_to_remove)
+                self.log(f"🔴 Đã dừng và xóa bot cũ {bot_id_to_remove}")
             
             # Kiểm tra số lượng bot hiện tại
             coin_manager = CoinManager()
             current_bots_count = coin_manager.count_bots_by_config(strategy_key)
             max_bots = self.max_bots_per_config.get(strategy_key, 2)
             
+            # NẾU CHƯA ĐỦ BOT, TÌM COIN MỚI THAY THẾ
             if current_bots_count < max_bots:
-                # Tìm coin mới thay thế
                 strategy_config = self.auto_strategies.get(strategy_key)
                 if strategy_config:
+                    # TÌM COIN MỚI - CHỈ LẤY 1 COIN ĐỂ THAY THẾ
                     new_symbols = self._find_qualified_symbols(
                         strategy_config['strategy_type'],
                         strategy_config['leverage'],
@@ -1749,14 +1752,19 @@ class BotManager:
                     )
                     
                     for symbol in new_symbols:
+                        # CHỈ THÊM 1 COIN MỚI DUY NHẤT ĐỂ THAY THẾ
                         if (symbol not in self.target_coins[strategy_key] and 
-                            len(self.target_coins[strategy_key]) < max_bots):
+                            len(self.target_coins[strategy_key]) < max_bots and
+                            symbol != closed_symbol):  # ĐẢM BẢO KHÔNG TRÙNG COIN CŨ
+                            
                             self.target_coins[strategy_key].append(symbol)
                             self.log(f"🔄 Đã thêm {symbol} vào danh sách target thay thế {closed_symbol}")
                             
-                            # Tạo bot ngay lập tức cho coin mới
-                            self._create_all_bots_from_target_list(strategy_key)
-                            break
+                            # TẠO BOT NGAY LẬP TỨC CHO COIN MỚI
+                            success = self._create_all_bots_from_target_list(strategy_key)
+                            if success:
+                                self.log(f"✅ Đã tạo bot mới {symbol} thay thế {closed_symbol}")
+                            break  # CHỈ THÊM 1 COIN MỚI
             
         except Exception as e:
             self.log(f"❌ Lỗi xử lý coin sau khi đóng: {str(e)}")
@@ -1963,12 +1971,12 @@ class BotManager:
                     self.target_coins[strategy_key].remove(bot.symbol)
                     self.log(f"🗑️ Đã xóa {bot.symbol} khỏi danh sách target {strategy_key}")
             
+            # DỪNG VÀ XÓA BOT HOÀN TOÀN
             bot.stop()
-            self.log(f"⛔ Đã dừng bot {bot_id}")
             del self.bots[bot_id]
+            self.log(f"⛔ Đã dừng và xóa bot {bot_id}")
             return True
         return False
-
     def stop_all(self):
         self.log("⛔ Đang dừng tất cả bot...")
         for bot_id in list(self.bots.keys()):
