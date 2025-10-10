@@ -1718,54 +1718,45 @@ class BotManager:
                 self.log(f"❌ Lỗi quét {strategy_type}: {str(e)}")
 
     def _handle_coin_after_close(self, strategy_key, closed_symbol):
-        """Xử lý khi một bot đóng lệnh - XÓA COIN CŨ VÀ TÌM COIN MỚI CHO DANH SÁCH TARGET"""
+        """Xử lý khi một coin đóng lệnh - CHỈ XÓA COIN, GIỮ CONFIG"""
         try:
-            if strategy_key not in self.target_coins:
-                self.target_coins[strategy_key] = []
-            
-            # XÓA COIN ĐÃ ĐÓNG KHỎI DANH SÁCH TARGET
-            if closed_symbol in self.target_coins[strategy_key]:
+            # 1. XÓA COIN ĐÓNG LỆNH KHỎI DANH SÁCH TARGET
+            if strategy_key in self.target_coins and closed_symbol in self.target_coins[strategy_key]:
                 self.target_coins[strategy_key].remove(closed_symbol)
                 self.log(f"🗑️ Đã xóa {closed_symbol} khỏi danh sách target {strategy_key}")
             
-            # ĐẢM BẢO DỪNG VÀ XÓA BOT CŨ
+            # 2. DỪNG BOT CỦA COIN ĐÓNG LỆNH
             bot_id_to_remove = f"{closed_symbol}_{strategy_key}"
             if bot_id_to_remove in self.bots:
                 self.stop_bot(bot_id_to_remove)
-                self.log(f"🔴 Đã dừng và xóa bot cũ {bot_id_to_remove}")
+                self.log(f"🔴 Đã dừng bot {bot_id_to_remove}")
             
-            # Kiểm tra số lượng bot hiện tại
-            coin_manager = CoinManager()
-            current_bots_count = coin_manager.count_bots_by_config(strategy_key)
-            max_bots = self.max_bots_per_config.get(strategy_key, 2)
-            
-            # NẾU CHƯA ĐỦ BOT, TÌM COIN MỚI THAY THẾ
-            if current_bots_count < max_bots:
-                strategy_config = self.auto_strategies.get(strategy_key)
-                if strategy_config:
-                    # TÌM COIN MỚI - CHỈ LẤY 1 COIN ĐỂ THAY THẾ
-                    new_symbols = self._find_qualified_symbols(
-                        strategy_config['strategy_type'],
-                        strategy_config['leverage'],
-                        strategy_config,
-                        strategy_key
-                    )
-                    
-                    for symbol in new_symbols:
-                        # CHỈ THÊM 1 COIN MỚI DUY NHẤT ĐỂ THAY THẾ
-                        if (symbol not in self.target_coins[strategy_key] and 
-                            len(self.target_coins[strategy_key]) < max_bots and
-                            symbol != closed_symbol):  # ĐẢM BẢO KHÔNG TRÙNG COIN CŨ
-                            
-                            self.target_coins[strategy_key].append(symbol)
-                            self.log(f"🔄 Đã thêm {symbol} vào danh sách target thay thế {closed_symbol}")
-                            
-                            # TẠO BOT NGAY LẬP TỨC CHO COIN MỚI
-                            success = self._create_all_bots_from_target_list(strategy_key)
-                            if success:
-                                self.log(f"✅ Đã tạo bot mới {symbol} thay thế {closed_symbol}")
+            # 3. QUAN TRỌNG: LUÔN TÌM COIN MỚI - KHÔNG BAO GIỜ XÓA CONFIG
+            strategy_config = self.auto_strategies.get(strategy_key)
+            if strategy_config:
+                # TÌM COIN MỚI THAY THẾ
+                new_symbols = self._find_qualified_symbols(
+                    strategy_config['strategy_type'],
+                    strategy_config['leverage'], 
+                    strategy_config,
+                    strategy_key
+                )
+                
+                for symbol in new_symbols:
+                    if (symbol not in self.target_coins.get(strategy_key, []) and 
+                        symbol != closed_symbol):
+                        
+                        # THÊM VÀO DANH SÁCH TARGET
+                        if strategy_key not in self.target_coins:
+                            self.target_coins[strategy_key] = []
+                        self.target_coins[strategy_key].append(symbol)
+                        
+                        # TẠO BOT MỚI
+                        success = self._create_auto_bot(symbol, strategy_config['strategy_type'], strategy_config)
+                        if success:
+                            self.log(f"✅ Đã tạo bot mới {symbol} thay thế {closed_symbol}")
                             break  # CHỈ THÊM 1 COIN MỚI
-            
+                
         except Exception as e:
             self.log(f"❌ Lỗi xử lý coin sau khi đóng: {str(e)}")
 
