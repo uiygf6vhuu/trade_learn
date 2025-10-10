@@ -1580,6 +1580,26 @@ class BotManager:
         del self.strategy_cooldowns[strategy_type][config_key]
         return False
 
+    def _find_qualified_symbols(self, strategy_type, leverage, config, strategy_key):
+        """Tìm coin phù hợp cho chiến lược"""
+        try:
+            threshold = config.get('threshold', 30)
+            volatility = config.get('volatility', 3)
+            grid_levels = config.get('grid_levels', 5)
+            
+            qualified_symbols = get_qualified_symbols(
+                self.api_key, self.api_secret, strategy_type, leverage,
+                threshold, volatility, grid_levels, 
+                max_candidates=20, 
+                final_limit=2,
+                strategy_key=strategy_key
+            )
+            
+            return qualified_symbols
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi tìm coin: {str(e)}")
+            return []
     def _auto_scan_loop(self):
         """VÒNG LẶP TỰ ĐỘNG QUÉT COIN VỚI COOLDOWN - ĐÃ SỬA"""
         while self.running:
