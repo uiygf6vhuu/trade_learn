@@ -1,4 +1,4 @@
-# trading_bot_lib.py - HỆ THỐNG HOÀN CHỈNH VỚI DANH SÁCH COIN GIỚI HẠN
+# trading_bot_lib.py - HỆ THỐNG HOÀN CHỈNH VỚI TÍNH NĂNG TẮT SL
 import json
 import hmac
 import hashlib
@@ -175,7 +175,7 @@ def create_tp_keyboard():
 def create_sl_keyboard():
     return {
         "keyboard": [
-            [{"text": "0"}, {"text": "50"}, {"text": "100"}],
+            [{"text": "TẮT SL"}, {"text": "50"}, {"text": "100"}],
             [{"text": "150"}, {"text": "200"}, {"text": "500"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
@@ -188,6 +188,17 @@ def create_bot_count_keyboard():
         "keyboard": [
             [{"text": "1"}, {"text": "2"}, {"text": "3"}],
             [{"text": "5"}, {"text": "10"}],
+            [{"text": "❌ Hủy bỏ"}]
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
+def create_coin_count_keyboard():
+    return {
+        "keyboard": [
+            [{"text": "3"}, {"text": "5"}, {"text": "8"}],
+            [{"text": "10"}, {"text": "15"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -472,7 +483,7 @@ class SmartCoinFinder:
             return None
 
     def find_best_coin(self, target_direction, excluded_symbols=None):
-        """TÌM COIN TỐT NHẤT VỚI KIỂM TRA ĐÒN BẨY"""
+        """TÌM COIN TỐT NHẤT VỚI KIỂM TRA ĐÒN BẨY VÀ SLOT"""
         try:
             if excluded_symbols is None:
                 excluded_symbols = set()
@@ -496,6 +507,10 @@ class SmartCoinFinder:
                     # Kiểm tra đòn bẩy
                     if not self.check_leverage_support(symbol):
                         continue
+                    
+                    # 🎯 KIỂM TRA CÒN SLOT TRỐNG KHÔNG - THÊM ĐIỀU KIỆN NÀY
+                    if not self.coin_manager.can_add_coin():
+                        return None  # Không còn slot thì dừng tìm
                     
                     # Phân tích coin
                     result = self.analyze_symbol_for_finding(symbol, target_direction)
@@ -839,7 +854,8 @@ class BaseBot:
         self.lev = lev
         self.percent = percent
         self.tp = tp
-        self.sl = sl
+        # 🎯 QUAN TRỌNG: Xử lý SL = 0 thành tắt SL
+        self.sl = None if sl == 0 else sl
         self.ws_manager = ws_manager
         self.api_key = api_key
         self.api_secret = api_secret
@@ -878,6 +894,9 @@ class BaseBot:
         self.last_find_time = 0
         self.find_interval = 5
         
+        # 🎯 THÊM BIẾN QUAN TRỌNG: Chiếm slot ngay khi tìm được coin
+        self.coin_occupied = False
+        
         self.check_position_status()
         if self.symbol:
             self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
@@ -885,7 +904,9 @@ class BaseBot:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         
-        self.log(f"🟢 Bot {strategy_name} khởi động | ĐB: {lev}x | Vốn: {percent}% | TP/SL: {tp}%/{sl}%")
+        # 🎯 HIỂN THỊ SL LÀ "TẮT" KHI SL = 0
+        sl_display = "TẮT" if self.sl is None else f"{self.sl}%"
+        self.log(f"🟢 Bot {strategy_name} khởi động | ĐB: {lev}x | Vốn: {percent}% | TP: {tp}% | SL: {sl_display}")
 
     def log(self, message):
         """CHỈ LOG KHI ĐÓNG/MỞ VỊ THẾ"""
@@ -937,7 +958,7 @@ class BaseBot:
             return "BUY" if random.random() > 0.5 else "SELL"
 
     def find_and_set_coin(self):
-        """TÌM VÀ SET COIN MỚI - VỚI DANH SÁCH GIỚI HẠN"""
+        """TÌM VÀ SET COIN MỚI - CHIẾM SLOT NGAY KHI TÌM ĐƯỢC"""
         current_time = time.time()
         if current_time - self.last_find_time < self.find_interval:
             return False
@@ -960,16 +981,44 @@ class BaseBot:
         if coin_data and coin_data.get('qualified', False):
             new_symbol = coin_data['symbol']
             
-            # 🎯 THÊM COIN VÀO DANH SÁCH
+            # 🎯 CHIẾM SLOT NGAY KHI TÌM ĐƯỢC COIN PHÙ HỢP
             if self.coin_manager.add_coin(new_symbol):
                 # Cập nhật symbol và thiết lập WebSocket
                 if self.symbol:
                     self.ws_manager.remove_symbol(self.symbol)
+                    # 🎯 QUAN TRỌNG: Giải phóng slot của coin cũ
+                    self.coin_manager.remove_coin(self.symbol)
                 
                 self.symbol = new_symbol
                 self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+                self.coin_occupied = True
+                
+                # Log thông tin
+                self.log(f"🔀 Đã chuyển sang coin mới: {new_symbol} | Hướng: {self.current_target_direction}")
                 return True
+            else:
+                # Không thể chiếm slot (có thể bị tranh chấp)
+                return False
         
+        return False
+
+    def force_switch_coin(self, reason=""):
+        """CHUYỂN COIN CHỦ ĐỘNG KHI KHÔNG PHÙ HỢP"""
+        if self.symbol and self.coin_occupied:
+            self.log(f"🔀 Chuyển coin: {self.symbol} → {reason}")
+            
+            # Giải phóng slot hiện tại
+            self.coin_manager.remove_coin(self.symbol)
+            self.ws_manager.remove_symbol(self.symbol)
+            self.coin_occupied = False
+            
+            # Reset trạng thái
+            self.symbol = None
+            self.status = "searching"
+            self.position_open = False
+            
+            # Tìm coin mới ngay lập tức
+            return self.find_and_set_coin()
         return False
 
     def check_position_status(self):
@@ -1006,11 +1055,12 @@ class BaseBot:
             pass
 
     def _reset_position(self):
-        """RESET TRẠNG THÁI VÀ XÓA COIN KHỎI DANH SÁCH"""
-        if self.position_open and self.symbol:
-            # 🎯 XÓA COIN KHỎI DANH SÁCH KHI ĐÓNG VỊ THẾ
+        """RESET TRẠNG THÁI - CHỈ XÓA COIN KHI ĐÓNG VỊ THẾ"""
+        # 🎯 CHỈ xóa coin khi đang có position_open và đóng vị thế
+        if self.position_open and self.symbol and self.coin_occupied:
             self.coin_manager.remove_coin(self.symbol)
             self.ws_manager.remove_symbol(self.symbol)
+            self.coin_occupied = False
             
         self.position_open = False
         self.status = "searching"
@@ -1030,13 +1080,25 @@ class BaseBot:
                     self.last_position_check = current_time
                 
                 if not self.position_open:
-                    # TÌM COIN MỚI NẾU CHƯA CÓ VỊ THẾ
-                    if not self.symbol or self.status == "searching":
-                        self.find_and_set_coin()
-                        time.sleep(2)
-                        continue
+                    # 🎯 LUÔN TÌM COIN MỚI NẾU CHƯA CÓ VỊ THẾ
+                    # Ngay cả khi đã có symbol, vẫn kiểm tra xem có coin tốt hơn không
+                    if self.symbol and self.coin_occupied:
+                        # Kiểm tra tín hiệu hiện tại
+                        current_signal = self.get_signal()
+                        
+                        # Nếu coin hiện tại không còn phù hợp, tìm coin khác ngay
+                        if current_signal == "NEUTRAL" or (current_signal and current_signal != self.current_target_direction):
+                            self.status = "searching"
+                            if self.force_switch_coin(f"Tín hiệu không phù hợp: {current_signal}"):
+                                continue  # Đã chuyển coin, tiếp tục vòng lặp
                     
-                    # PHÂN TÍCH TÍN HIỆU
+                    # Nếu chưa có symbol hoặc đang tìm kiếm
+                    if not self.symbol or self.status == "searching" or not self.coin_occupied:
+                        if self.find_and_set_coin():
+                            time.sleep(2)
+                            continue
+                    
+                    # PHÂN TÍCH TÍN HIỆU VÀ MỞ VỊ THẾ
                     signal = self.get_signal()
                     
                     if signal and signal != "NEUTRAL":
@@ -1046,11 +1108,21 @@ class BaseBot:
                             if self.open_position(signal):
                                 self.last_trade_time = current_time
                             else:
-                                time.sleep(5)
+                                # 🎯 Nếu không mở được vị thế, chuyển sang coin khác
+                                self.status = "searching"
+                                if self.symbol and self.coin_occupied:
+                                    self.coin_manager.remove_coin(self.symbol)  # Giải phóng slot
+                                    self.coin_occupied = False
+                                self.symbol = None
+                                time.sleep(2)
+                        else:
+                            time.sleep(2)
                     else:
+                        # 🎯 Tín hiệu trung lập, chuyển sang coin khác
                         if signal == "NEUTRAL":
                             self.status = "searching"
-                            self.symbol = None
+                            if self.symbol and self.coin_occupied:
+                                self.force_switch_coin("Tín hiệu trung lập")
                         time.sleep(2)
                 
                 # KIỂM TRA TP/SL
@@ -1064,7 +1136,7 @@ class BaseBot:
 
     def stop(self):
         self._stop = True
-        if self.symbol:
+        if self.symbol and self.coin_occupied:
             self.ws_manager.remove_symbol(self.symbol)
             self.coin_manager.remove_coin(self.symbol)
         self.log(f"🔴 Bot dừng")
@@ -1109,6 +1181,9 @@ class BaseBot:
                     self.position_open = True
                     self.status = "open"
                     
+                    # 🎯 HIỂN THỊ SL LÀ "TẮT" KHI SL = 0
+                    sl_display = "TẮT" if self.sl is None else f"{self.sl}%"
+                    
                     message = (
                         f"✅ <b>MỞ VỊ THẾ {self.symbol}</b>\n"
                         f"🤖 Chiến lược: {self.strategy_name}\n"
@@ -1116,7 +1191,7 @@ class BaseBot:
                         f"🏷️ Giá vào: {self.entry:.4f}\n"
                         f"📊 Khối lượng: {executed_qty:.4f}\n"
                         f"💰 Đòn bẩy: {self.lev}x\n"
-                        f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%"
+                        f"🎯 TP: {self.tp}% | 🛡️ SL: {sl_display}"
                     )
                     self.log(message)
                     return True
@@ -1204,9 +1279,11 @@ class BaseBot:
             
         roi = (profit / invested) * 100
 
+        # 🎯 CHỈ KIỂM TRA TP KHI CÓ GIÁ TRỊ
         if self.tp is not None and roi >= self.tp:
             self.close_position(f"✅ Đạt TP {self.tp}% (ROI: {roi:.2f}%)")
-        elif self.sl is not None and self.sl > 0 and roi <= -self.sl:
+        # 🎯 CHỈ KIỂM TRA SL KHI SL KHÁC None (TỨC SL ĐƯỢC BẬT)
+        elif self.sl is not None and roi <= -self.sl:
             self.close_position(f"❌ Đạt SL {self.sl}% (ROI: {roi:.2f}%)")
 
 # ========== BOT MULTI-TIMEFRAME ĐỘNG ==========
@@ -1244,8 +1321,6 @@ class DynamicMultiTimeframeBot(BaseBot):
         except Exception:
             return None
 
-# ========== BOT MANAGER HOÀN CHỈNH ==========
-# ========== BOT MANAGER HOÀN CHỈNH ==========
 # ========== BOT MANAGER HOÀN CHỈNH ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
@@ -1300,7 +1375,9 @@ class BotManager:
             "• 🤖 Chỉ 1 bot quét toàn bộ Binance\n"
             "• 🔢 Giới hạn số lượng coin tối đa\n"  
             "• 🔄 Tự động thay thế coin khi đóng lệnh\n"
-            "• ⚖️ Cân bằng vị thế tự động"
+            "• ⚖️ Cân bằng vị thế tự động\n"
+            "• 🎯 <b>CHUYỂN COIN LINH HOẠT</b> - Nhảy coin ngay khi không phù hợp\n"
+            "• 🚫 <b>TẮT SL</b> - Không dừng lỗ khi SL = 0"
         )
         send_telegram(welcome, chat_id, create_main_menu(),
                      bot_token=self.telegram_bot_token, 
@@ -1313,6 +1390,7 @@ class BotManager:
 
     def add_bot(self, lev, percent, tp, sl, max_coins):
         """TẠO 1 BOT DUY NHẤT VỚI GIỚI HẠN COIN"""
+        # 🎯 QUAN TRỌNG: Xử lý SL = 0 thành tắt SL
         if sl == 0:
             sl = None
             
@@ -1343,7 +1421,7 @@ class BotManager:
                 lev=lev, 
                 percent=percent, 
                 tp=tp, 
-                sl=sl, 
+                sl=sl,  # 🎯 SL có thể là None nếu tắt
                 ws_manager=self.ws_manager,
                 api_key=self.api_key, 
                 api_secret=self.api_secret, 
@@ -1354,16 +1432,21 @@ class BotManager:
             
             self.bots[bot_id] = bot
             
+            # 🎯 HIỂN THỊ SL LÀ "TẮT" KHI SL = 0
+            sl_display = "TẮT" if sl is None else f"{sl}%"
+            
             success_msg = (
                 f"✅ <b>BOT DUY NHẤT ĐÃ ĐƯỢC TẠO</b>\n\n"
                 f"💰 Đòn bẩy: {lev}x\n"
                 f"📊 % Số dư: {percent}%\n"
                 f"🎯 TP: {tp}%\n"
-                f"🛡️ SL: {sl}%\n"
+                f"🛡️ SL: {sl_display}\n"
                 f"🔢 Coin tối đa: {max_coins}\n\n"
                 f"🔄 <b>Bot sẽ:</b>\n"
                 f"• Quét TOÀN BỘ Binance\n"
                 f"• Tìm coin tốt nhất với đòn bẩy {lev}x\n" 
+                f"• CHIẾM SLOT ngay khi tìm được coin phù hợp\n"
+                f"• TỰ ĐỘNG chuyển coin khi tín hiệu không phù hợp\n"
                 f"• DỪNG tìm khi đủ {max_coins} coin\n"
                 f"• Tự thay thế coin khi đóng lệnh\n"
                 f"• Bỏ qua coin lỗi, tìm coin khác"
@@ -1426,17 +1509,22 @@ class BotManager:
             current_coin = bot.symbol if bot.symbol else "Đang tìm..."
             status = "🟢 Đang trade" if bot.position_open else "🔍 Đang tìm coin"
             
+            # 🎯 HIỂN THỊ SL LÀ "TẮT" KHI SL = 0
+            sl_display = "TẮT" if bot.sl is None else f"{bot.sl}%"
+            
             total_binance = binance_buy_count + binance_sell_count
             
             summary = (
                 f"🤖 <b>BOT DUY NHẤT</b> | {status}\n\n"
                 f"💰 Đòn bẩy: {bot.lev}x\n"
                 f"📊 % Số dư: {bot.percent}%\n"
-                f"🎯 TP: {bot.tp}% | 🛡️ SL: {bot.sl}%\n"
-                f"🔢 Coin hiện tại: {current_coin}\n\n"
+                f"🎯 TP: {bot.tp}% | 🛡️ SL: {sl_display}\n"
+                f"🔢 Coin hiện tại: {current_coin}\n"
+                f"🎯 Hướng mong muốn: {bot.current_target_direction or 'Chưa xác định'}\n\n"
                 f"📈 <b>COIN GIỚI HẠN: {self.coin_manager.max_coins}</b>\n"
-                f"🟢 Đang giao dịch: {len(trading_coins)} coin\n"
+                f"🟢 Đang theo dõi: {len(trading_coins)} coin\n"
                 f"🟡 Còn trống: {available_slots} slot\n"
+                f"🔒 Đã chiếm slot: {'Có' if bot.coin_occupied else 'Không'}\n"
             )
             
             if trading_coins:
@@ -1626,7 +1714,8 @@ class BotManager:
                     
                     send_telegram(
                         f"🎯 Take Profit: {tp}%\n\n"
-                        f"Chọn Stop Loss (%):",
+                        f"Chọn Stop Loss (%):\n"
+                        f"<i>Chọn 'TẮT SL' để không dừng lỗ</i>",
                         chat_id,
                         create_sl_keyboard(),
                         self.telegram_bot_token, self.telegram_chat_id
@@ -1641,6 +1730,43 @@ class BotManager:
                 self.user_states[chat_id] = {}
                 send_telegram("❌ Đã hủy", chat_id, create_main_menu(),
                             self.telegram_bot_token, self.telegram_chat_id)
+            elif text == 'TẮT SL':
+                # 🎯 XỬ LÝ TẮT SL
+                user_state['sl'] = 0  # Gán 0 để sau này chuyển thành None
+                
+                # 🎯 TẠO BOT DUY NHẤT
+                leverage = user_state.get('leverage')
+                percent = user_state.get('percent')
+                tp = user_state.get('tp')
+                max_coins = user_state.get('max_coins', 5)
+                
+                success = self.add_bot(leverage, percent, tp, 0, max_coins)  # SL = 0
+                
+                if success:
+                    success_msg = (
+                        f"✅ <b>BOT DUY NHẤT ĐÃ SẴN SÀNG</b>\n\n"
+                        f"💰 Đòn bẩy: {leverage}x\n"
+                        f"📊 % Số dư: {percent}%\n"
+                        f"🎯 TP: {tp}%\n"
+                        f"🛡️ SL: TẮT\n"
+                        f"🔢 Coin tối đa: {max_coins}\n\n"
+                        f"🔄 <b>Cơ chế hoạt động:</b>\n"
+                        f"• Quét TOÀN BỘ Binance\n"
+                        f"• Tìm coin tốt nhất với đòn bẩy {leverage}x\n"
+                        f"• CHIẾM SLOT ngay khi tìm được coin phù hợp\n"
+                        f"• TỰ ĐỘNG chuyển coin khi tín hiệu không phù hợp\n"
+                        f"• DỪNG khi đủ {max_coins} coin\n"
+                        f"• TỰ ĐỘNG thay thế khi đóng lệnh\n"
+                        f"• <b>KHÔNG DỪNG LỖ</b> (SL đã tắt)\n"
+                        f"• BỎ QUA coin lỗi, tìm coin khác"
+                    )
+                    send_telegram(success_msg, chat_id, create_main_menu(),
+                                self.telegram_bot_token, self.telegram_chat_id)
+                else:
+                    send_telegram("❌ Lỗi tạo bot", chat_id, create_main_menu(),
+                                self.telegram_bot_token, self.telegram_chat_id)
+                
+                self.user_states[chat_id] = {}
             else:
                 try:
                     sl = float(text)
@@ -1669,6 +1795,8 @@ class BotManager:
                             f"🔄 <b>Cơ chế hoạt động:</b>\n"
                             f"• Quét TOÀN BỘ Binance\n"
                             f"• Tìm coin tốt nhất với đòn bẩy {leverage}x\n"
+                            f"• CHIẾM SLOT ngay khi tìm được coin phù hợp\n"
+                            f"• TỰ ĐỘNG chuyển coin khi tín hiệu không phù hợp\n"
                             f"• DỪNG khi đủ {max_coins} coin\n"
                             f"• TỰ ĐỘNG thay thế khi đóng lệnh\n"
                             f"• BỎ QUA coin lỗi, tìm coin khác"
@@ -1682,7 +1810,7 @@ class BotManager:
                     self.user_states[chat_id] = {}
                     
                 except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ:",
+                    send_telegram("⚠️ Vui lòng nhập số hợp lệ hoặc chọn 'TẮT SL':",
                                 chat_id, create_sl_keyboard(),
                                 self.telegram_bot_token, self.telegram_chat_id)
 
@@ -1720,16 +1848,21 @@ class BotManager:
                 symbol_info = bot.symbol if bot.symbol else "Đang tìm coin..."
                 status = "🟢 Đang trade" if bot.position_open else "🔍 Đang tìm"
                 
+                # 🎯 HIỂN THỊ SL LÀ "TẮT" KHI SL = 0
+                sl_display = "TẮT" if bot.sl is None else f"{bot.sl}%"
+                
                 message += f"🔹 Trạng thái: {status}\n"
                 message += f"🔹 Coin hiện tại: {symbol_info}\n"
+                message += f"🔹 Đã chiếm slot: {'Có' if bot.coin_occupied else 'Không'}\n"
+                message += f"🔹 Hướng mong muốn: {bot.current_target_direction or 'Chưa xác định'}\n"
                 message += f"🔹 Đòn bẩy: {bot.lev}x\n"
                 message += f"🔹 % Số dư: {bot.percent}%\n"
-                message += f"🔹 TP/SL: {bot.tp}%/{bot.sl}%\n"
+                message += f"🔹 TP/SL: {bot.tp}%/{sl_display}\n"
                 message += f"🔹 Coin tối đa: {self.coin_manager.max_coins}\n"
                 
                 trading_coins = self.coin_manager.get_trading_coins()
                 if trading_coins:
-                    message += f"\n🔗 <b>Coin đang giao dịch:</b>\n"
+                    message += f"\n🔗 <b>Coin đang theo dõi:</b>\n"
                     for coin in trading_coins:
                         message += f"• {coin}\n"
                 
@@ -1803,7 +1936,7 @@ class BotManager:
         
         elif text == "🎯 Chiến lược":
             strategy_info = (
-                "🎯 <b>HỆ THỐNG BOT ĐƠN DUY NHẤT</b>\n\n"
+                "🎯 <b>HỆ THỐNG BOT ĐƠN DUY NHẤT - CHUYỂN COIN LINH HOẠT</b>\n\n"
                 
                 "🤖 <b>1 BOT - NHIỀU COIN</b>\n"
                 "• Chỉ 1 bot duy nhất quét toàn bộ Binance\n"
@@ -1812,15 +1945,24 @@ class BotManager:
                 
                 "🔢 <b>CƠ CHẾ COIN GIỚI HẠN</b>\n"
                 "• Danh sách coin ban đầu: RỖNG\n"
-                "• Mở vị thế: THÊM 1 coin vào danh sách\n"  
-                "• Đóng vị thế: XÓA 1 coin khỏi danh sách\n"
+                "• Tìm coin phù hợp: CHIẾM SLOT NGAY\n"
+                "• Mở vị thế: GIỮ NGUYÊN slot\n"  
+                "• Đóng vị thế: XÓA coin khỏi danh sách\n"
+                "• Coin không phù hợp: CHUYỂN NGAY coin khác\n"
                 "• Dừng tìm khi đủ số lượng coin\n"
                 "• Tiếp tục tìm khi có slot trống\n\n"
                 
-                "⚖️ <b>CÂN BẰNG VỊ THẾ</b>\n"
-                "• Tự động phân tích tỷ lệ LONG/SHORT\n"
-                "• Ưu tiên hướng ngược lại để cân bằng\n"
-                "• Tránh tập trung quá nhiều 1 hướng"
+                "⚡ <b>CHUYỂN COIN LINH HOẠT</b>\n"
+                "• Tín hiệu NEUTRAL → Chuyển coin ngay\n"
+                "• Tín hiệu không phù hợp → Chuyển coin ngay\n"
+                "• Không mở được lệnh → Chuyển coin ngay\n"
+                "• Luôn tìm coin tốt nhất có thể\n\n"
+                
+                "🚫 <b>TẮT STOP LOSS</b>\n"
+                "• Khi SL = 0: Bot sẽ KHÔNG tự động đóng lệnh khi lỗ\n"
+                "• Chỉ đóng lệnh khi đạt TP hoặc đóng thủ công\n"
+                "• Phù hợp cho chiến lược hold lâu dài\n"
+                "• CẢNH BÁO: Rủi ro cao khi không có SL"
             )
             send_telegram(strategy_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1833,17 +1975,25 @@ class BotManager:
             trading_coins = self.coin_manager.get_trading_coins()
             available_slots = self.coin_manager.get_available_slots()
             
+            # 🎯 HIỂN THỊ TRẠNG THÁI SL
+            sl_status = "TẮT" 
+            if self.bots:
+                bot = list(self.bots.values())[0]
+                sl_status = "TẮT" if bot.sl is None else f"{bot.sl}%"
+            
             config_info = (
                 "⚙️ <b>CẤU HÌNH HỆ THỐNG BOT ĐƠN</b>\n\n"
                 f"🔑 Binance API: {api_status}\n"
                 f"🤖 Bot: {has_bot}\n"
                 f"🔢 Coin tối đa: {self.coin_manager.max_coins}\n"
-                f"📈 Đang giao dịch: {len(trading_coins)} coin\n"
+                f"📈 Đang theo dõi: {len(trading_coins)} coin\n"
                 f"🔓 Còn trống: {available_slots} slot\n"
+                f"🛡️ SL: {sl_status}\n"
                 f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối\n"
                 f"⚖️ Position Balancer: Đã sẵn sàng\n\n"
                 f"🔄 <b>Hệ thống 1 bot đang hoạt động</b>\n"
-                f"🎯 <b>Tự động thêm/xóa coin khi mở/đóng lệnh</b>"
+                f"🎯 <b>CHUYỂN COIN LINH HOẠT - Chiếm slot ngay khi tìm được coin</b>\n"
+                f"🚫 <b>TẮT SL - Không dừng lỗ khi SL = 0</b>"
             )
             send_telegram(config_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1851,15 +2001,5 @@ class BotManager:
         elif text:
             self.send_main_menu(chat_id)
 
-def create_coin_count_keyboard():
-    return {
-        "keyboard": [
-            [{"text": "3"}, {"text": "5"}, {"text": "8"}],
-            [{"text": "10"}, {"text": "15"}],
-            [{"text": "❌ Hủy bỏ"}]
-        ],
-        "resize_keyboard": True,
-        "one_time_keyboard": True
-    }
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
