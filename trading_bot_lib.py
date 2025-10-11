@@ -1104,7 +1104,8 @@ class BaseBot:
                     if signal and signal != "NEUTRAL":
                         if (current_time - self.last_trade_time > 20 and
                             current_time - self.last_close_time > self.cooldown_period):
-                            
+                            self.open_position(current_signal)  # 🎯 LỆNH ĐẶT LỆNH
+                            self.last_trade_time = current_time  # 🎯 LUÔN CẬP NHẬT THỜI GIAN
                             if self.open_position(signal):
                                 self.last_trade_time = current_time
                             else:
