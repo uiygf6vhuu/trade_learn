@@ -489,7 +489,7 @@ class SmartCoinFinder:
                 excluded_symbols = set()
             
             # Lấy danh sách coin USDT
-            all_symbols = get_all_usdt_pairs(limit=300)
+            all_symbols = get_all_usdt_pairs(limit=600)
             if not all_symbols:
                 return None
             
