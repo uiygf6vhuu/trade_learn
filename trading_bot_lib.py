@@ -1,4 +1,4 @@
-# trading_bot_lib.py - HỆ THỐNG HOÀN CHỈNH VỚI TÍNH NĂNG TẮT SL
+# trading_bot_lib.py - HỆ THỐNG HOÀN CHỈNH VỚI TÍNH NĂNG TẮT SL VÀ CHUYỂN COIN LINH HOẠT
 import json
 import hmac
 import hashlib
@@ -440,6 +440,7 @@ class SmartCoinFinder:
         self.required_leverage = required_leverage
         self.analyzer = MultiTimeframeAnalyzer()
         self.leverage_cache = {}
+        self.coin_manager = CoinManager()  # 🎯 THÊM DÒNG NÀY ĐỂ FIX LỖI
         
     def check_leverage_support(self, symbol):
         """KIỂM TRA COIN CÓ HỖ TRỢ ĐÒN BẨY YÊU CẦU KHÔNG"""
@@ -489,7 +490,7 @@ class SmartCoinFinder:
                 excluded_symbols = set()
             
             # Lấy danh sách coin USDT
-            all_symbols = get_all_usdt_pairs(limit=600)
+            all_symbols = get_all_usdt_pairs(limit=300)
             if not all_symbols:
                 return None
             
@@ -1104,8 +1105,6 @@ class BaseBot:
                     if signal and signal != "NEUTRAL":
                         if (current_time - self.last_trade_time > 20 and
                             current_time - self.last_close_time > self.cooldown_period):
-                            self.open_position(current_signal)  # 🎯 LỆNH ĐẶT LỆNH
-                            self.last_trade_time = current_time  # 🎯 LUÔN CẬP NHẬT THỜI GIAN
                             if self.open_position(signal):
                                 self.last_trade_time = current_time
                             else:
@@ -1402,7 +1401,7 @@ class BotManager:
         # Kiểm tra kết nối Binance
         test_balance = get_balance(self.api_key, self.api_secret)
         if test_balance is None:
-            self.log("❌ LỖI: Không thể kết nối Binance")
+            self.log("❌ LỚI: Không thể kết nối Binance")
             return False
         
         # 🎯 CHỈ CHO PHÉP 1 BOT
