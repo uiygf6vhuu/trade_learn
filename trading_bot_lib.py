@@ -1,5 +1,6 @@
 # trading_bot_simple.py - HỆ THỐNG BOT TRADING ĐƠN GIẢN HOÀN CHỈNH
 import json
+import logging
 import hmac
 import hashlib
 import time
