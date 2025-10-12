@@ -1622,7 +1622,7 @@ class PerfectTradingBot:
             self.close_position(f"❌ Đạt SL {self.sl}% (ROI: {roi:.2f}%)")
 
 # ========== HỆ THỐNG QUẢN LÝ HOÀN CHỈNH ==========
-class PerfectBotManager:
+class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
         self.bots = {}
