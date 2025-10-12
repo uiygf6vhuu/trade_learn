@@ -142,6 +142,26 @@ def create_bot_count_keyboard():
         "one_time_keyboard": True
     }
 
+def create_stop_bot_keyboard(bots):
+    """Tạo keyboard để chọn bot cần dừng"""
+    keyboard = []
+    
+    for bot in bots:
+        bot_info = bot.get_info()
+        symbol_display = bot_info['symbol'] if bot_info['symbol'] else "Đang tìm coin"
+        status_display = "📈" if bot_info['status'] == "open" else "🔍"
+        
+        keyboard.append([{"text": f"⛔ {status_display} {symbol_display} - Bot {bot_info['bot_id'][-4:]}"}])
+    
+    keyboard.append([{"text": "⛔ DỪNG TẤT CẢ"}])
+    keyboard.append([{"text": "❌ Hủy bỏ"}])
+    
+    return {
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "one_time_keyboard": True
+    }
+
 # ========== PHÂN TÍCH VOLUME VÀ NẾN ==========
 class VolumeCandleAnalyzer:
     """PHÂN TÍCH XU HƯỚNG DỰA TRÊN VOLUME VÀ NẾN"""
@@ -513,7 +533,7 @@ class SimpleTrendBot:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         
-        self.log(f"🟢 Bot khởi động - ĐB: {lev}x, Vốn: {percent}%, TP: {tp}%, SL: {sl}%")
+        self.log(f"🟢 Bot khởi động - ĐB: {lev}x, Vốn: {percent}%, TP: {tp}%, SL: {sl if sl > 0 else 'TẮT'}%")
     
     def log(self, message):
         """Ghi log và gửi Telegram"""
@@ -655,6 +675,7 @@ class SimpleTrendBot:
                     self.entry_price = avg_price
                     self.position_size = executed_qty
                     
+                    sl_display = f"{self.sl}%" if self.sl > 0 else "TẮT"
                     message = (
                         f"✅ <b>ĐÃ MỞ VỊ THẾ</b>\n"
                         f"🔗 Coin: {symbol}\n"
@@ -663,7 +684,7 @@ class SimpleTrendBot:
                         f"📊 Khối lượng: {executed_qty:.4f}\n"
                         f"💵 Giá trị: {executed_qty * self.entry_price:.2f} USDT\n"
                         f"💰 Đòn bẩy: {self.lev}x\n"
-                        f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%"
+                        f"🎯 TP: {self.tp}% | 🛡️ SL: {sl_display}"
                     )
                     self.log(message)
                     return True
@@ -680,7 +701,7 @@ class SimpleTrendBot:
             return False
     
     def _check_tp_sl(self):
-        """BƯỚC 4: Kiểm tra TP/SL"""
+        """BƯỚC 4: Kiểm tra TP/SL - Nếu SL=0 thì không kiểm tra SL"""
         if not self.symbol or self.entry_price <= 0:
             return
         
@@ -694,10 +715,10 @@ class SimpleTrendBot:
         else:
             pnl_percent = ((self.entry_price - current_price) / self.entry_price) * 100
         
-        # Kiểm tra TP/SL
+        # Kiểm tra TP/SL - Nếu SL=0 thì chỉ kiểm tra TP
         if self.tp and pnl_percent >= self.tp:
             self._close_position(f"✅ Đạt TP {self.tp}% (ROI: {pnl_percent:.2f}%)")
-        elif self.sl and pnl_percent <= -self.sl:
+        elif self.sl > 0 and pnl_percent <= -self.sl:  # Chỉ kiểm tra SL nếu SL > 0
             self._close_position(f"❌ Đạt SL {self.sl}% (ROI: {pnl_percent:.2f}%)")
     
     def _close_position(self, reason=""):
@@ -747,14 +768,16 @@ class SimpleTrendBot:
         self.position_size = 0
     
     def stop(self):
-        """Dừng bot"""
+        """Dừng bot và đóng vị thế nếu có"""
         self._stop = True
-        if self.status == "open":
+        if self.status == "open" and self.symbol:
+            self.log("🔴 Đang dừng bot và đóng vị thế...")
             self._close_position("Dừng bot")
         self.log("🔴 Bot đã dừng")
     
     def get_info(self):
         """Lấy thông tin bot"""
+        sl_display = self.sl if self.sl > 0 else "TẮT"
         return {
             'bot_id': self.bot_id,
             'symbol': self.symbol,
@@ -763,7 +786,7 @@ class SimpleTrendBot:
             'lev': self.lev,
             'percent': self.percent,
             'tp': self.tp,
-            'sl': self.sl,
+            'sl': sl_display,
             'entry_price': self.entry_price,
             'position_size': self.position_size
         }
@@ -831,13 +854,14 @@ class BotManager:
                 continue
         
         if created_count > 0:
+            sl_display = sl if sl > 0 else "TẮT"
             success_msg = (
                 f"✅ <b>ĐÃ TẠO {created_count} BOT ĐỘC LẬP</b>\n\n"
                 f"🤖 Số lượng: {created_count} bot\n"
                 f"💰 Đòn bẩy: {lev}x\n"
                 f"📊 % Số dư: {percent}%\n"
                 f"🎯 TP: {tp}%\n"
-                f"🛡️ SL: {sl}%\n\n"
+                f"🛡️ SL: {sl_display}%\n\n"
                 f"🎯 <b>Mỗi bot là 1 thread độc lập</b>\n"
                 f"🔄 <b>Tự động tìm coin & trade</b>\n"
                 f"📊 <b>Tự reset sau mỗi lệnh</b>"
@@ -936,6 +960,21 @@ class BotManager:
                 self.bots.remove(bot)
                 self.log(f"⛔ Đã dừng bot {bot_id}")
                 return True
+        return False
+
+    def stop_bot_by_symbol(self, symbol):
+        """Dừng bot theo symbol và đóng vị thế trên Binance"""
+        stopped_bots = []
+        
+        for bot in self.bots[:]:  # Dùng slice để tạo bản sao tránh lỗi khi xóa
+            if bot.symbol == symbol:
+                bot.stop()
+                self.bots.remove(bot)
+                stopped_bots.append(bot.bot_id)
+        
+        if stopped_bots:
+            self.log(f"⛔ Đã dừng {len(stopped_bots)} bot trading {symbol}")
+            return True
         return False
 
     def _telegram_listener(self):
@@ -1097,7 +1136,7 @@ class BotManager:
                     
                     send_telegram(
                         f"🎯 Take Profit: {tp}%\n\n"
-                        f"Chọn Stop Loss (%):",
+                        f"Chọn Stop Loss (% - Nhập 0 để tắt SL):",
                         chat_id,
                         create_sl_keyboard(),
                         self.telegram_bot_token, self.telegram_chat_id
@@ -1133,13 +1172,14 @@ class BotManager:
                     success = self.add_bots(bot_count, leverage, percent, tp, sl)
 
                     if success:
+                        sl_display = sl if sl > 0 else "TẮT"
                         success_msg = (
                             f"✅ <b>ĐÃ TẠO {bot_count} BOT THÀNH CÔNG</b>\n\n"
                             f"🤖 Số lượng: {bot_count} bot độc lập\n"
                             f"💰 Đòn bẩy: {leverage}x\n"
                             f"📊 % Số dư: {percent}%\n"
                             f"🎯 TP: {tp}%\n"
-                            f"🛡️ SL: {sl}%\n\n"
+                            f"🛡️ SL: {sl_display}%\n\n"
                             f"🎯 <b>Mỗi bot là 1 thread độc lập</b>\n"
                             f"🔄 <b>Tự động tìm coin & trade</b>\n"
                             f"📊 <b>Tự reset sau mỗi lệnh</b>"
@@ -1210,9 +1250,37 @@ class BotManager:
                 send_telegram("🤖 Không có bot nào đang chạy", chat_id,
                             bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
             else:
+                # Hiển thị danh sách bot để chọn dừng từng cái
+                send_telegram(
+                    "⛔ <b>CHỌN BOT CẦN DỪNG</b>\n\n"
+                    "Chọn bot cần dừng từ danh sách dưới đây:",
+                    chat_id,
+                    create_stop_bot_keyboard(self.bots),
+                    self.telegram_bot_token, self.telegram_chat_id
+                )
+        
+        elif text.startswith("⛔ "):
+            # Xử lý dừng bot theo lựa chọn
+            if text == "⛔ DỪNG TẤT CẢ":
                 self.stop_all()
                 send_telegram("⛔ Đã dừng tất cả bot", chat_id, create_main_menu(),
                             self.telegram_bot_token, self.telegram_chat_id)
+            else:
+                # Tìm bot theo symbol từ text
+                symbol_text = text.replace("⛔ ", "").split(" - ")[0]
+                if symbol_text == "🔍 Đang tìm coin":
+                    send_telegram("⚠️ Bot đang tìm coin, không thể dừng theo symbol", chat_id,
+                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
+                else:
+                    # Dừng bot theo symbol và đóng vị thế
+                    if self.stop_bot_by_symbol(symbol_text):
+                        send_telegram(f"⛔ Đã dừng bot trading {symbol_text} và đóng vị thế", 
+                                    chat_id, create_main_menu(),
+                                    self.telegram_bot_token, self.telegram_chat_id)
+                    else:
+                        send_telegram(f"⚠️ Không tìm thấy bot trading {symbol_text}", 
+                                    chat_id, create_main_menu(),
+                                    self.telegram_bot_token, self.telegram_chat_id)
         
         elif text == "💰 Số dư":
             try:
@@ -1277,7 +1345,8 @@ class BotManager:
                 "⚖️ <b>QUẢN LÝ RỦI RO</b>\n"
                 "• Tự động cân bằng vị thế\n"
                 "• Mỗi bot độc lập thread\n"
-                "• Tự reset sau mỗi lệnh"
+                "• Tự reset sau mỗi lệnh\n"
+                "• Có thể tắt SL (nhập 0)"
             )
             send_telegram(strategy_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1300,15 +1369,6 @@ class BotManager:
             )
             send_telegram(config_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text.startswith("⛔ "):
-            bot_id = text.replace("⛔ ", "").strip()
-            if self.stop_bot(bot_id):
-                send_telegram(f"⛔ Đã dừng bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                send_telegram(f"⚠️ Không tìm thấy bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
         
         elif text:
             self.send_main_menu(chat_id)
