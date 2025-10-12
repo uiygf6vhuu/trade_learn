@@ -769,7 +769,7 @@ class SimpleTrendBot:
         }
 
 # ========== QUẢN LÝ BOT ĐƠN GIẢN ==========
-class SimpleBotManager:
+class BotManager:
     """QUẢN LÝ BOT ĐƠN GIẢN"""
     
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
