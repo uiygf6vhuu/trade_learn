@@ -1,4 +1,4 @@
-# trading_bot_volume_candle.py - HOÀN CHỈNH VỚI HỆ THỐNG VOLUME & NẾN
+# trading_bot_volume_candle_complete.py - HOÀN CHỈNH VỚI HỆ THỐNG VOLUME & NẾN & KIỂM TRA ĐÒN BẨY
 import json
 import hmac
 import hashlib
@@ -198,6 +198,28 @@ def create_bot_count_keyboard():
         "one_time_keyboard": True
     }
 
+# ========== HÀM KIỂM TRA ĐÒN BẨY TỐI ĐA ==========
+def get_max_leverage(symbol, api_key, api_secret):
+    """Lấy đòn bẩy tối đa cho một symbol"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        data = binance_api_request(url)
+        if not data:
+            return 100  # Mặc định nếu không lấy được
+        
+        for s in data['symbols']:
+            if s['symbol'] == symbol.upper():
+                # Tìm thông tin đòn bẩy từ filters
+                for f in s['filters']:
+                    if f['filterType'] == 'LEVERAGE':
+                        if 'maxLeverage' in f:
+                            return int(f['maxLeverage'])
+                break
+        return 100  # Mặc định
+    except Exception as e:
+        logger.error(f"Lỗi lấy đòn bẩy tối đa {symbol}: {str(e)}")
+        return 100
+
 # ========== HỆ THỐNG PHÂN TÍCH VOLUME & NẾN ==========
 class VolumeCandleStrategy:
     """HỆ THỐNG PHÂN TÍCH DỰA TRÊN VOLUME VÀ NẾN THEO YÊU CẦU"""
@@ -298,54 +320,86 @@ class VolumeCandleStrategy:
             logger.error(f"❌ Lỗi phân tích volume nến {symbol}: {str(e)}")
             return "NEUTRAL"
 
-# ========== SMART COIN FINDER ==========
+# ========== SMART COIN FINDER NÂNG CẤP ==========
 class SmartCoinFinder:
-    """TÌM COIN THÔNG MINH DỰA TRÊN PHÂN TÍCH VOLUME & NẾN"""
+    """TÌM COIN THÔNG MINH DỰA TRÊN PHÂN TÍCH VOLUME & NẾN VÀ ĐÒN BẨY"""
     
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
         self.analyzer = VolumeCandleStrategy()
+        self.leverage_cache = {}  # Cache đòn bẩy để tối ưu hiệu năng
         
-    def find_coin_by_direction(self, target_direction, excluded_symbols=None):
-        """TÌM 1 COIN DUY NHẤT - VỚI PHÂN TÍCH VOLUME & NẾN"""
+    def get_symbol_leverage(self, symbol):
+        """Lấy đòn bẩy tối đa với cache"""
+        if symbol in self.leverage_cache:
+            return self.leverage_cache[symbol]
+        
+        max_leverage = get_max_leverage(symbol, self.api_key, self.api_secret)
+        self.leverage_cache[symbol] = max_leverage
+        return max_leverage
+    
+    def find_coin_by_direction(self, target_direction, target_leverage, excluded_symbols=None):
+        """TÌM 1 COIN DUY NHẤT - VỚI PHÂN TÍCH VOLUME & NẾN VÀ KIỂM TRA ĐÒN BẨY"""
         try:
             if excluded_symbols is None:
                 excluded_symbols = set()
             
-            logger.info(f"🔍 Bot đang tìm 1 coin {target_direction} với phân tích Volume & Nến...")
+            logger.info(f"🔍 Bot đang tìm 1 coin {target_direction} với đòn bẩy {target_leverage}x...")
             
             all_symbols = get_all_usdt_pairs(limit=600)
             if not all_symbols:
                 logger.error("❌ Không lấy được danh sách coin từ Binance")
                 return None
             
-            # Bước 3: Trộn ngẫu nhiên danh sách coin
+            # Bước 1: Trộn ngẫu nhiên danh sách coin
             random.shuffle(all_symbols)
+            
+            checked_symbols = 0
+            leverage_passed = 0
+            signal_passed = 0
             
             for symbol in all_symbols:
                 try:
                     if symbol in excluded_symbols:
                         continue
                     
-                    # Bước 2: Phân tích coin với hệ thống Volume & Nến
+                    checked_symbols += 1
+                    
+                    # Bước 2: KIỂM TRA ĐÒN BẨY TRƯỚC
+                    max_leverage = self.get_symbol_leverage(symbol)
+                    
+                    if max_leverage < target_leverage:
+                        logger.debug(f"⚠️ {symbol} - Đòn bẩy tối đa {max_leverage}x < {target_leverage}x -> BỎ QUA")
+                        continue
+                    
+                    leverage_passed += 1
+                    
+                    # Bước 3: Phân tích coin với hệ thống Volume & Nến
                     signal = self.analyzer.analyze_volume_candle(symbol)
                     
-                    # Bước 3: Chỉ chọn coin cùng hướng với target_direction
+                    # Bước 4: Chỉ chọn coin cùng hướng với target_direction
                     if signal == target_direction:
-                        logger.info(f"✅ Bot đã tìm thấy coin: {symbol} - {target_direction}")
+                        signal_passed += 1
+                        logger.info(f"✅ Bot đã tìm thấy coin: {symbol} - {target_direction} - Đòn bẩy: {max_leverage}x")
                         return {
                             'symbol': symbol,
                             'direction': target_direction,
+                            'max_leverage': max_leverage,
                             'score': 0.8,
                             'qualified': True
                         }
+                    else:
+                        logger.debug(f"⚪ {symbol} - Tín hiệu {signal} không khớp {target_direction}")
                         
                 except Exception as e:
                     logger.debug(f"❌ Lỗi phân tích {symbol}: {str(e)}")
                     continue
             
-            logger.warning(f"⚠️ Không tìm thấy coin {target_direction} phù hợp")
+            logger.warning(f"⚠️ Không tìm thấy coin {target_direction} phù hợp. "
+                          f"Đã kiểm tra: {checked_symbols} coin, "
+                          f"Đòn bẩy đạt: {leverage_passed}, "
+                          f"Tín hiệu đạt: {signal_passed}")
             return None
                 
         except Exception as e:
@@ -803,7 +857,7 @@ class BaseBot:
             return "BUY" if random.random() > 0.5 else "SELL"
 
     def find_and_set_coin(self):
-        """TÌM VÀ SET COIN MỚI - VỚI KIỂM TRA CÂN BẰNG VỊ THẾ"""
+        """TÌM VÀ SET COIN MỚI - VỚI KIỂM TRA CÂN BẰNG VỊ THẾ VÀ ĐÒN BẨY"""
         try:
             current_time = time.time()
             if current_time - self.last_find_time < self.find_interval:
@@ -813,7 +867,7 @@ class BaseBot:
             
             self.current_target_direction = self.get_target_direction()
             
-            self.log(f"🎯 Đang tìm coin {self.current_target_direction} để CÂN BẰNG hệ thống")
+            self.log(f"🎯 Đang tìm coin {self.current_target_direction} với đòn bẩy {self.lev}x...")
             
             managed_coins = self.coin_manager.get_managed_coins()
             excluded_symbols = set(managed_coins.keys())
@@ -821,13 +875,15 @@ class BaseBot:
             if excluded_symbols:
                 self.log(f"🚫 Tránh các coin đang trade: {', '.join(excluded_symbols)}")
             
+            # THÊM THAM SỐ target_leverage=self.lev
             coin_data = self.coin_finder.find_coin_by_direction(
                 self.current_target_direction, 
+                self.lev,  # THÊM ĐÒN BẨY MỤC TIÊU
                 excluded_symbols
             )
         
             if coin_data is None:
-                self.log(f"⚠️ Không tìm thấy coin {self.current_target_direction} phù hợp, thử lại sau")
+                self.log(f"⚠️ Không tìm thấy coin {self.current_target_direction} với đòn bẩy {self.lev}x phù hợp, thử lại sau")
                 return False
                 
             if not coin_data.get('qualified', False):
@@ -835,6 +891,7 @@ class BaseBot:
                 return False
             
             new_symbol = coin_data['symbol']
+            max_leverage = coin_data.get('max_leverage', 100)
             
             if self._register_coin_with_retry(new_symbol):
                 if self.symbol:
@@ -844,7 +901,7 @@ class BaseBot:
                 self.symbol = new_symbol
                 self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
                 
-                self.log(f"🎯 Đã tìm thấy coin {new_symbol} - {self.current_target_direction}")
+                self.log(f"🎯 Đã tìm thấy coin {new_symbol} - {self.current_target_direction} - Đòn bẩy hỗ trợ: {max_leverage}x")
                 
                 self.status = "waiting"
                 return True
@@ -1620,6 +1677,13 @@ class BotManager:
                                     self.telegram_bot_token, self.telegram_chat_id)
                         return
 
+                    # THÊM CẢNH BÁO VỀ ĐÒN BẨY CAO
+                    warning_msg = ""
+                    if leverage > 50:
+                        warning_msg = f"\n\n⚠️ <b>CẢNH BÁO RỦI RO CAO</b>\nĐòn bẩy {leverage}x rất nguy hiểm!"
+                    elif leverage > 20:
+                        warning_msg = f"\n\n⚠️ <b>CẢNH BÁO RỦI RO</b>\nĐòn bẩy {leverage}x có rủi ro cao!"
+
                     user_state['leverage'] = leverage
                     user_state['step'] = 'waiting_percent'
                     
@@ -1627,7 +1691,7 @@ class BotManager:
                     balance_info = f"\n💰 Số dư hiện có: {balance:.2f} USDT" if balance else ""
                     
                     send_telegram(
-                        f"💰 Đòn bẩy: {leverage}x{balance_info}\n\n"
+                        f"💰 Đòn bẩy: {leverage}x{balance_info}{warning_msg}\n\n"
                         f"Chọn % số dư cho mỗi lệnh:",
                         chat_id,
                         create_percent_keyboard(),
@@ -1930,12 +1994,18 @@ class BotManager:
                 "• Ưu tiên hướng NGƯỢC với số lượng nhiều hơn\n"
                 "• Đảm bảo đa dạng hóa rủi ro\n\n"
                 
+                "🔍 <b>Lọc đòn bẩy thông minh:</b>\n"
+                "• Tự động kiểm tra đòn bẩy tối đa của coin\n"
+                "• Chỉ chọn coin hỗ trợ đòn bẩy mong muốn\n"
+                "• Tránh lỗi khi đặt lệnh\n\n"
+                
                 "🔄 <b>Quy trình tìm coin:</b>\n"
                 "1. Xác định hướng ưu tiên (cân bằng vị thế)\n"
                 "2. Quét ngẫu nhiên 600 coin\n"
-                "3. Phân tích Volume & Nến 3 khung\n"
-                "4. Chọn coin cùng hướng ưu tiên\n"
-                "5. Vào lệnh và quản lý TP/SL"
+                "3. Kiểm tra đòn bẩy hỗ trợ\n"
+                "4. Phân tích Volume & Nến 3 khung\n"
+                "5. Chọn coin cùng hướng ưu tiên\n"
+                "6. Vào lệnh và quản lý TP/SL"
             )
             send_telegram(strategy_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -1995,4 +2065,3 @@ class BotManager:
 
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
-
