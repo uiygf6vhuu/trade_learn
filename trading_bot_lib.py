@@ -1112,11 +1112,11 @@ class BaseBot:
                     
                 time.sleep(1)
             
-        except Exception as e:
-            if time.time() - self.last_error_log_time > 10:
-                self.log(f"❌ Lỗi hệ thống: {str(e)}")
-                self.last_error_log_time = time.time()
-            time.sleep(1)
+            except Exception as e:
+                if time.time() - self.last_error_log_time > 10:
+                    self.log(f"❌ Lỗi hệ thống: {str(e)}")
+                    self.last_error_log_time = time.time()
+                time.sleep(1)
     def stop(self):
         self._stop = True
         if self.symbol:
