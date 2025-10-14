@@ -225,7 +225,7 @@ class VolumeCandleStrategy:
     """HỆ THỐNG PHÂN TÍCH DỰA TRÊN VOLUME VÀ NẾN THEO YÊU CẦU"""
     
     def __init__(self):
-        self.volume_threshold = 1.2  # Ngưỡng volume tăng
+        self.volume_threshold = 1.5  # Ngưỡng volume tăng
         self.small_body_threshold = 0.001  # Ngưỡng thân nến nhỏ (0.1%)
         
     def get_klines(self, symbol, interval, limit):
@@ -254,7 +254,7 @@ class VolumeCandleStrategy:
                     continue
                 
                 # Lấy nến hiện tại và volume
-                current_candle = klines[-1]
+                current_candle = klines[-2]
                 prev_candles = klines[-10:-1]  # 9 nến trước
                 
                 open_price = float(current_candle[1])
@@ -277,11 +277,19 @@ class VolumeCandleStrategy:
                 is_red = close_price < open_price
                 
                 # Xác định nến thân nhỏ
+                # Lấy nến hiện tại
+
                 body_size = abs(close_price - open_price)
-                avg_price = (open_price + close_price) / 2
-                is_small_body = (body_size / avg_price) < self.small_body_threshold
+                candle_range = high_price - low_price
                 
-                # Áp dụng quy tắc
+                # Kiểm tra để tránh chia cho 0
+                if candle_range > 0:
+                    # So sánh kích thước thân nến với TỔNG phạm vi của nến đó
+                    body_vs_range_ratio = body_size / candle_range
+                    # Ví dụ: thân nến nhỏ hơn 20% tổng phạm vi là thân nhỏ
+                    is_small_body = body_vs_range_ratio < 0.20 
+                else:
+                    is_small_body = True# Áp dụng quy tắc
                 signal = "NEUTRAL"
                 
                 # Quy tắc 1: Volume tăng + nến xanh -> MUA
@@ -320,7 +328,6 @@ class VolumeCandleStrategy:
             logger.error(f"❌ Lỗi phân tích volume nến {symbol}: {str(e)}")
             return "NEUTRAL"
 
-# ========== SMART COIN FINDER NÂNG CẤP ==========
 # ========== SMART COIN FINDER NÂNG CẤP ==========
 class SmartCoinFinder:
     """TÌM COIN THÔNG MINH DỰA TRÊN PHÂN TÍCH VOLUME & NẾN VÀ ĐÒN BẨY"""
