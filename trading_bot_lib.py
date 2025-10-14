@@ -369,7 +369,7 @@ class SmartCoinFinder:
                     # Bước 2: KIỂM TRA ĐÒN BẨY TRƯỚC
                     max_leverage = self.get_symbol_leverage(symbol)
                     
-                    if max_leverage < target_leverage:
+                    if max_leverage < target_leverage:  # SỬ DỤNG target_leverage Ở ĐÂY
                         logger.debug(f"⚠️ {symbol} - Đòn bẩy tối đa {max_leverage}x < {target_leverage}x -> BỎ QUA")
                         continue
                     
@@ -405,7 +405,6 @@ class SmartCoinFinder:
         except Exception as e:
             logger.error(f"❌ Lỗi tìm coin: {str(e)}")
             return None
-
 # ========== QUẢN LÝ COIN CHUNG ==========
 class CoinManager:
     _instance = None
