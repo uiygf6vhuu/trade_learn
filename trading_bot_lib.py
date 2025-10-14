@@ -280,6 +280,7 @@ class VolumeCandleStrategy:
                 # Lấy nến hiện tại
 
                 body_size = abs(close_price - open_price)
+                avg_price = (open_price + close_price) / 2
                 candle_range = high_price - low_price
                 
                 # Kiểm tra để tránh chia cho 0
@@ -305,7 +306,6 @@ class VolumeCandleStrategy:
                     signal = "BUY"
                 
                 signals.append((interval, signal))
-                logger.debug(f"   {interval}: volume_ratio={volume_ratio:.2f}, body={body_size/avg_price*100:.3f}% -> {signal}")
             
             # Tổng hợp tín hiệu từ 3 khung
             if not signals:
