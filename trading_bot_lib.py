@@ -255,7 +255,7 @@ class VolumeCandleStrategy:
                 
                 # Lấy nến hiện tại và volume
                 current_candle = klines[-2]
-                prev_candles = klines[-10:-1]  # 9 nến trước
+                prev_candles = klines[-10:-2]  # 9 nến trước
                 
                 open_price = float(current_candle[1])
                 close_price = float(current_candle[4])
@@ -1128,7 +1128,7 @@ class BaseBot:
                 return False
     
             if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
-                self.log(f"❌ Không thể đặt đòn bẩy {self.lev}x")
+                #self.log(f"❌ Không thể đặt đòn bẩy {self.lev}x")
                 return False
     
             balance = get_balance(self.api_key, self.api_secret)
