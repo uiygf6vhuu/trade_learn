@@ -353,14 +353,18 @@ class SmartCoinFinder:
         try:
             current_time = time.time()
             
-            # Kiểm tra cache còn hiệu lực
+            # KIỂM TRA CACHE - THÊM ĐIỀU KIỆN LÀM MỚI KHI CACHE RỖNG
             if (target_leverage in self.qualified_symbols_cache and 
+                self.qualified_symbols_cache[target_leverage] and
                 current_time - self.last_cache_update < self.cache_timeout):
                 return self.qualified_symbols_cache[target_leverage]
             
             logger.info(f"🔍 Đang lọc coin hỗ trợ đòn bẩy ≥ {target_leverage}x...")
             all_symbols = get_all_usdt_pairs(limit=600)
             if not all_symbols:
+                # Nếu không lấy được symbol mới, thử dùng cache cũ nếu có
+                if target_leverage in self.qualified_symbols_cache:
+                    return self.qualified_symbols_cache[target_leverage]
                 return []
             
             qualified_symbols = []
@@ -388,8 +392,11 @@ class SmartCoinFinder:
             
         except Exception as e:
             logger.error(f"❌ Lỗi lọc coin theo đòn bẩy: {str(e)}")
+            # Trả về cache cũ nếu có lỗi
+            if target_leverage in self.qualified_symbols_cache:
+                return self.qualified_symbols_cache[target_leverage]
             return []
-    
+        
     def get_symbol_leverage(self, symbol):
         """Lấy đòn bẩy tối đa với cache"""
         if symbol in self.leverage_cache:
@@ -433,13 +440,19 @@ class SmartCoinFinder:
                 try:
                     checked_count += 1
                     
-                    # Bước 4: Phân tích tín hiệu
+                    # Bước 4: KIỂM TRA LẠI ĐÒN BẨY THỰC TẾ - QUAN TRỌNG!
+                    current_max_leverage = self.get_symbol_leverage(symbol)
+                    if current_max_leverage < target_leverage:
+                        logger.debug(f"⚪ {symbol} - Đòn bẩy thực tế {current_max_leverage}x < {target_leverage}x -> BỎ QUA")
+                        continue
+                    
+                    # Bước 5: Phân tích tín hiệu
                     signal = self.analyzer.analyze_volume_candle(symbol)
                     
-                    # Bước 5: Chỉ chọn coin cùng hướng
+                    # Bước 6: Chỉ chọn coin cùng hướng
                     if signal == target_direction:
                         signal_passed += 1
-                        max_leverage = self.get_symbol_leverage(symbol)
+                        max_leverage = current_max_leverage  # Sử dụng giá trị đã kiểm tra
                         
                         logger.info(f"✅ Bot đã tìm thấy coin: {symbol} - {target_direction} - Đòn bẩy: {max_leverage}x")
                         return {
@@ -859,6 +872,13 @@ class BaseBot:
                          bot_token=self.telegram_bot_token, 
                          default_chat_id=self.telegram_chat_id)
 
+    def clear_finder_cache(self):
+        """Xóa cache của coin finder khi cần thiết"""
+        try:
+            self.coin_finder.clear_cache()
+            self.log("🧹 Đã xóa cache tìm kiếm coin")
+        except Exception as e:
+            self.log(f"⚠️ Lỗi khi xóa cache: {str(e)}")
     def _handle_price_update(self, price):
         if self._stop or not price or price <= 0:
             return
@@ -1052,8 +1072,8 @@ class BaseBot:
             try:
                 current_time = time.time()
                 
-                # KIỂM TRA ĐÒN BẨY ĐỊNH KỲ - mới thêm
-                if current_time - getattr(self, '_last_leverage_check', 0) > 60:  # 1 phút kiểm tra 1 lần
+                # KIỂM TRA ĐÒN BẨY ĐỊNH KỲ
+                if current_time - getattr(self, '_last_leverage_check', 0) > 60:
                     if not self.verify_leverage_and_switch():
                         time.sleep(2)
                         continue
@@ -1066,11 +1086,16 @@ class BaseBot:
                 if not self.position_open:
                     # Nếu không có symbol, tìm coin mới
                     if not self.symbol:
-                        if not self.find_and_set_coin():
+                        success = self.find_and_set_coin()
+                        if not success:
+                            # Nếu không tìm thấy coin, xóa cache và thử lại sau
+                            if current_time - getattr(self, '_last_cache_clear', 0) > 300:  # 5 phút
+                                self.clear_finder_cache()
+                                self._last_cache_clear = current_time
                             time.sleep(5)
                             continue
                     
-                    # KIỂM TRA ĐÒN BẨY TRƯỚC KHI PHÂN TÍCH TÍN HIỆU - mới thêm
+                    # KIỂM TRA ĐÒN BẨY TRƯỚC KHI PHÂN TÍCH TÍN HIỆU
                     if not self.verify_leverage_and_switch():
                         time.sleep(2)
                         continue
@@ -1101,7 +1126,6 @@ class BaseBot:
                     self.log(f"❌ Lỗi hệ thống: {str(e)}")
                     self.last_error_log_time = time.time()
                 time.sleep(1)
-
     def stop(self):
         self._stop = True
         if self.symbol:
