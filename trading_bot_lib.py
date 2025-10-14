@@ -1007,7 +1007,7 @@ class BaseBot:
                 self.symbol = new_symbol
                 self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
                 
-                self.log(f"✅ Đã tìm thấy và đăng ký coin {new_symbol} - {self.current_target_direction} - Đòn bẩy: {max_leverage}x")
+                self.log(f"✅ Đã tìm thấy và đăng ký coin {new_symbol} - {self.current_target_direction} - Đòn bẩy: {self.lev}x")
                 
                 self.status = "waiting"
                 return True
@@ -1195,7 +1195,7 @@ class BaseBot:
                 executed_qty = float(result.get('executedQty', 0))
                 avg_price = float(result.get('avgPrice', current_price))
                 
-                if executed_qty > 0:
+                if executed_qty >= 0:
                     self.entry = avg_price
                     self.side = side
                     self.qty = executed_qty if side == "BUY" else -executed_qty
@@ -1216,7 +1216,6 @@ class BaseBot:
                     return True
                 else:
                     self.log(f"❌ Lệnh không khớp - Số lượng: {qty} -> TÌM COIN KHÁC")
-                    self._cleanup_symbol()
                     return False
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
