@@ -824,7 +824,7 @@ class BaseBot:
         self.last_position_check = 0
         self.last_error_log_time = 0
         
-        self.cooldown_period = 300
+        self.cooldown_period = 3
         self.position_check_interval = 30
         
         self._close_attempted = False
@@ -1094,7 +1094,7 @@ class BaseBot:
                     signal = self.get_signal()
                     
                     if signal and signal != "NEUTRAL":
-                        if current_time - self.last_trade_time > 60 and current_time - self.last_close_time > self.cooldown_period:
+                        if current_time - self.last_trade_time > 3 and current_time - self.last_close_time > self.cooldown_period:
                             if self.open_position(signal):
                                 self.last_trade_time = current_time
                             else:
