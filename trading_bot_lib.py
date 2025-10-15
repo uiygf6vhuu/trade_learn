@@ -225,7 +225,7 @@ class VolumeCandleStrategy:
     """HỆ THỐNG PHÂN TÍCH DỰA TRÊN VOLUME VÀ NẾN THEO YÊU CẦU"""
     
     def __init__(self):
-        self.volume_threshold = 1.5  # Ngưỡng volume tăng
+        self.volume_threshold = 2  # Ngưỡng volume tăng
         self.small_body_threshold = 0.001  # Ngưỡng thân nến nhỏ (0.1%)
         
     def get_klines(self, symbol, interval, limit):
