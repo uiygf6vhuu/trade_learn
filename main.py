@@ -65,11 +65,12 @@ def main():
     except Exception as e:
         print(f"❌ LỖI HỆ THỐNG: {str(e)}")
         manager.log(f"❌ LỖI HỆ THỐNG: {str(e)}")
-    #finally:
-        #manager.stop_all()
+    finally:
+        manager.stop_all()
 
 if __name__ == "__main__":
     main()
+
 
 
 
