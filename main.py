@@ -39,6 +39,8 @@ def main():
         telegram_bot_token=TELEGRAM_BOT_TOKEN,
         telegram_chat_id=TELEGRAM_CHAT_ID
     )
+    if not manager.running:
+        print("🔴 BotManager.running đã bị đặt thành False ngay sau khởi tạo!")
     
     # Thêm các bot từ cấu hình
     if BOT_CONFIGS:
@@ -70,5 +72,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
