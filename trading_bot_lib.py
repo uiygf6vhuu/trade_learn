@@ -1129,13 +1129,11 @@ class BaseBot:
             # KIỂM TRA LẠI ĐÒN BẨY TRƯỚC KHI MỞ LỆNH
             current_leverage = self.coin_finder.get_symbol_leverage(self.symbol)
             if current_leverage < self.lev:
-                self.log(f"❌ Coin {self.symbol} chỉ hỗ trợ đòn bẩy {current_leverage}x < {self.lev}x -> TÌM COIN KHÁC")
                 self._cleanup_symbol()
                 return False
     
             # Thiết lập đòn bẩy
             if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
-                self.log(f"❌ Không thể đặt đòn bẩy {self.lev}x -> TÌM COIN KHÁC")
                 self._cleanup_symbol()
                 return False
     
@@ -1212,7 +1210,6 @@ class BaseBot:
                 return False
                     
         except Exception as e:
-            self.log(f"❌ Lỗi mở lệnh: {str(e)} -> TÌM COIN KHÁC")
             # XÓA SYMBOL KHI CÓ LỖI
             self._cleanup_symbol()
             return False
