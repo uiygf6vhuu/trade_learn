@@ -523,10 +523,10 @@ class SmartCoinFinder:
                     buy_signals += 1
             
             # Quyết định tín hiệu cuối cùng
-            if buy_signals > sell_signals and buy_signals >= 2:
-                return "BUY"
-            elif sell_signals > buy_signals and sell_signals >= 2:
+            if buy_signals > sell_signals and buy_signals >= 1:
                 return "SELL"
+            elif sell_signals > buy_signals and sell_signals >= 1:
+                return "BUY"
             else:
                 return "NEUTRAL"
                 
