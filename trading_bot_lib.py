@@ -1,4 +1,4 @@
-# trading_bot_volume_candle_fibonacci_complete.py - HOÀN CHỈNH VỚI NHỒI LỆNH FIBONACCI ĐÃ SỬA LỖI
+# trading_bot_global_market_complete.py - HOÀN CHỈNH VỚI TÍN HIỆU TOÀN THỊ TRƯỜNG
 import json
 import hmac
 import hashlib
@@ -70,7 +70,7 @@ def create_cancel_keyboard():
 def create_strategy_keyboard():
     return {
         "keyboard": [
-            [{"text": "📊 Volume & Nến System"}],
+            [{"text": "📊 Global Market System"}],
             [{"text": "❌ Hủy bỏ"}]
         ],
         "resize_keyboard": True,
@@ -269,6 +269,33 @@ def get_all_usdt_pairs(limit=600):
         logger.error(f"❌ Lỗi lấy danh sách coin từ Binance: {str(e)}")
         return []
 
+def get_top_volume_symbols(limit=100):
+    """Lấy top coin có khối lượng giao dịch cao nhất"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        data = binance_api_request(url)
+        if not data:
+            return []
+        
+        # Lọc các cặp USDT và sắp xếp theo volume
+        usdt_pairs = []
+        for item in data:
+            symbol = item.get('symbol', '')
+            if symbol.endswith('USDT'):
+                volume = float(item.get('volume', 0))
+                usdt_pairs.append((symbol, volume))
+        
+        # Sắp xếp giảm dần theo volume
+        usdt_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        top_symbols = [symbol for symbol, volume in usdt_pairs[:limit]]
+        logger.info(f"✅ Lấy được {len(top_symbols)} coin volume cao nhất")
+        return top_symbols
+        
+    except Exception as e:
+        logger.error(f"❌ Lỗi lấy top volume: {str(e)}")
+        return []
+
 def get_max_leverage(symbol, api_key, api_secret):
     """Lấy đòn bẩy tối đa cho một symbol"""
     try:
@@ -446,11 +473,103 @@ class CoinManager:
         with self._lock:
             return list(self.active_coins)
 
-# ========== SMART COIN FINDER ==========
+# ========== GLOBAL MARKET ANALYZER ==========
+class GlobalMarketAnalyzer:
+    def __init__(self, api_key, api_secret):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.last_analysis_time = 0
+        self.analysis_interval = 10  # 10 giây
+        self.current_market_signal = "NEUTRAL"
+        self.last_green_count = 0
+        self.last_red_count = 0
+        
+    def analyze_global_market(self):
+        """Phân tích toàn thị trường dựa trên 100 coin volume cao nhất - 1 PHÚT"""
+        try:
+            current_time = time.time()
+            if current_time - self.last_analysis_time < self.analysis_interval:
+                return self.current_market_signal
+            
+            # Lấy top 100 coin volume cao nhất
+            top_symbols = get_top_volume_symbols(limit=100)
+            if not top_symbols:
+                return "NEUTRAL"
+            
+            green_count = 0
+            red_count = 0
+            total_analyzed = 0
+            
+            for symbol in top_symbols:
+                try:
+                    # Lấy dữ liệu nến 1 PHÚT
+                    klines = self.get_klines(symbol, '1m', limit=1)
+                    if not klines:
+                        continue
+                    
+                    current_candle = klines[-1]
+                    
+                    open_price = float(current_candle[1])
+                    close_price = float(current_candle[4])
+                    
+                    # Phân tích nến hiện tại
+                    if close_price > open_price:
+                        green_count += 1
+                    elif close_price < open_price:
+                        red_count += 1
+                    
+                    total_analyzed += 1
+                    
+                except Exception as e:
+                    continue
+            
+            if total_analyzed == 0:
+                return "NEUTRAL"
+            
+            # Tính tỷ lệ
+            green_ratio = (green_count / total_analyzed) * 100
+            red_ratio = (red_count / total_analyzed) * 100
+            
+            # Quyết định tín hiệu
+            if green_count > red_count and green_ratio >= 55:  # Nến xanh chiếm ưu thế
+                signal = "BUY"
+            elif red_count > green_count and red_ratio >= 55:  # Nến đỏ chiếm ưu thế
+                signal = "SELL"
+            else:
+                signal = "NEUTRAL"
+            
+            self.current_market_signal = signal
+            self.last_analysis_time = current_time
+            self.last_green_count = green_count
+            self.last_red_count = red_count
+            
+            logger.info(f"📊 TÍN HIỆU TOÀN THỊ TRƯỜNG: {signal} | 🟢 Xanh: {green_count} | 🔴 Đỏ: {red_count} | 📈 Tỷ lệ: {green_ratio:.1f}%/{red_ratio:.1f}%")
+            
+            return signal
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi phân tích toàn thị trường: {str(e)}")
+            return "NEUTRAL"
+    
+    def get_klines(self, symbol, interval, limit=1):
+        """Lấy dữ liệu nến từ Binance"""
+        try:
+            url = "https://fapi.binance.com/fapi/v1/klines"
+            params = {
+                'symbol': symbol.upper(),
+                'interval': interval,
+                'limit': limit
+            }
+            return binance_api_request(url, params=params)
+        except Exception as e:
+            return None
+
+# ========== SMART COIN FINDER NÂNG CẤP ==========
 class SmartCoinFinder:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
+        self.global_analyzer = GlobalMarketAnalyzer(api_key, api_secret)
         self.last_direction_check = 0
         self.current_direction = None
         
@@ -484,78 +603,38 @@ class SmartCoinFinder:
             logger.error(f"Lỗi phân tích vị thế thị trường: {str(e)}")
             return "NEUTRAL"
     
-    def get_volume_candle_signal(self, symbol):
-        """Bước 2: Phân tích tín hiệu volume và nến"""
-        try:
-            # Lấy dữ liệu từ 3 khung thời gian
-            timeframes = ['1m', '5m', '15m']
-            buy_signals = 0
-            sell_signals = 0
-            
-            for tf in timeframes:
-                klines = self.get_klines(symbol, tf, limit=10)
-                if not klines or len(klines) < 2:
-                    continue
-                
-                current_candle = klines[-1]
-                prev_candle = klines[-2]
-                
-                # Phân tích volume và nến
-                current_volume = float(current_candle[5])
-                prev_volume = float(prev_candle[5])
-                volume_increase = current_volume > prev_volume * 1.2
-                
-                open_price = float(current_candle[1])
-                close_price = float(current_candle[4])
-                is_green_candle = close_price > open_price
-                is_red_candle = close_price < open_price
-                
-                candle_body = abs(close_price - open_price)
-                avg_price = (open_price + close_price) / 2
-                is_small_body = candle_body < avg_price * 0.001  # Thân nến nhỏ
-                
-                # Logic tín hiệu
-                if volume_increase and is_green_candle:
-                    buy_signals += 1
-                elif volume_increase and is_red_candle:
-                    sell_signals += 1
-                elif not volume_increase and is_small_body:
-                    buy_signals += 1
-            
-            # Quyết định tín hiệu cuối cùng
-            if buy_signals > sell_signals and buy_signals >= 1:
-                return "SELL"
-            elif sell_signals > buy_signals and sell_signals >= 1:
-                return "BUY"
-            else:
-                return "NEUTRAL"
-                
-        except Exception as e:
-            logger.error(f"Lỗi phân tích volume nến {symbol}: {str(e)}")
-            return "NEUTRAL"
+    def get_global_market_signal(self):
+        """Bước 2: Lấy tín hiệu từ phân tích toàn thị trường"""
+        return self.global_analyzer.analyze_global_market()
     
-    def get_klines(self, symbol, interval, limit=10):
-        """Lấy dữ liệu nến từ Binance"""
-        try:
-            url = "https://fapi.binance.com/fapi/v1/klines"
-            params = {
-                'symbol': symbol.upper(),
-                'interval': interval,
-                'limit': limit
-            }
-            return binance_api_request(url, params=params)
-        except Exception as e:
-            logger.error(f"Lỗi lấy klines {symbol}: {str(e)}")
-            return None
+    def get_combined_signal(self):
+        """Kết hợp tín hiệu toàn thị trường và cân bằng vị thế"""
+        # Lấy tín hiệu toàn thị trường
+        market_signal = self.get_global_market_signal()
+        
+        # Lấy trạng thái cân bằng vị thế
+        position_balance = self.get_market_position_balance()
+        
+        logger.info(f"🎯 KẾT HỢP TÍN HIỆU | Toàn thị trường: {market_signal} | Cân bằng vị thế: {position_balance}")
+        
+        # Ưu tiên tín hiệu toàn thị trường, nhưng cân nhắc với cân bằng vị thế
+        if market_signal == "BUY" and position_balance == "SHORT":
+            return "BUY"  # Thị trường tăng + nhiều LONG -> vẫn BUY (cùng hướng xu hướng)
+        elif market_signal == "SELL" and position_balance == "LONG":
+            return "SELL" # Thị trường giảm + nhiều SHORT -> vẫn SELL (cùng hướng xu hướng)
+        elif market_signal != "NEUTRAL":
+            return market_signal  # Ưu tiên tín hiệu toàn thị trường
+        else:
+            return "NEUTRAL"
     
     def get_symbol_leverage(self, symbol):
         """Lấy đòn bẩy tối đa của symbol"""
         return get_max_leverage(symbol, self.api_key, self.api_secret)
     
     def find_best_coin(self, target_direction, excluded_coins=None):
-        """Bước 3: Tìm coin tốt nhất theo hướng mong muốn"""
+        """Bước 3: Tìm coin tốt nhất theo hướng mong muốn - RANDOM TỪ 600 COIN"""
         try:
-            all_symbols = get_all_usdt_pairs(limit=200)
+            all_symbols = get_all_usdt_pairs(limit=600)  # Lấy 600 coin
             if not all_symbols:
                 return None
             
@@ -572,13 +651,9 @@ class SmartCoinFinder:
                 if max_lev < 10:  # Yêu cầu đòn bẩy tối thiểu
                     continue
                 
-                # Phân tích tín hiệu
-                signal = self.get_volume_candle_signal(symbol)
-                
-                # Kiểm tra trùng hướng với target
-                if signal == target_direction:
-                    logger.info(f"✅ Tìm thấy coin phù hợp: {symbol} - Hướng: {signal}")
-                    return symbol
+                # KHÔNG PHÂN TÍCH TÍN HIỆU TỪNG COIN - CHỈ CẦN ĐÒN BẨY VÀ KHÔNG TRÙNG
+                logger.info(f"✅ Tìm thấy coin phù hợp: {symbol} - Đòn bẩy: {max_lev}x")
+                return symbol
             
             return None
             
@@ -665,7 +740,7 @@ class WebSocketManager:
         for symbol in list(self.connections.keys()):
             self.remove_symbol(symbol)
 
-# ========== BASE BOT NÂNG CẤP VỚI NHỒI LỆNH ==========
+# ========== BASE BOT NÂNG CẤP VỚI TÍN HIỆU TOÀN THỊ TRƯỜNG ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, 
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None):
@@ -792,8 +867,8 @@ class BaseBot:
             
             self.last_find_time = current_time
             
-            # Bước 1: Xác định hướng ưu tiên
-            target_direction = self.coin_finder.get_market_position_balance()
+            # Bước 1: Xác định hướng ưu tiên từ TÍN HIỆU TOÀN THỊ TRƯỜNG
+            target_direction = self.coin_finder.get_combined_signal()
             if target_direction == "NEUTRAL":
                 # Nếu thị trường cân bằng, chọn ngẫu nhiên
                 target_direction = random.choice(["BUY", "SELL"])
@@ -801,7 +876,7 @@ class BaseBot:
             # Lấy danh sách coin đang active để tránh trùng lặp
             active_coins = self.coin_manager.get_active_coins()
             
-            # Bước 3: Tìm coin phù hợp
+            # Bước 3: Tìm coin phù hợp (RANDOM TỪ 600 COIN)
             new_symbol = self.coin_finder.find_best_coin(
                 target_direction, 
                 excluded_coins=active_coins
@@ -959,7 +1034,7 @@ class BaseBot:
                     self.check_position_status()
                     self.last_position_check = current_time
                 
-                # ========== SỬA LỖI QUAN TRỌNG: LUÔN KIỂM TRA NHỒI LỆNH KHI CÓ VỊ THẾ ==========
+                # ========== LUÔN KIỂM TRA NHỒI LỆNH KHI CÓ VỊ THẾ ==========
                 if self.position_open and self.entry_base > 0:
                     self.check_averaging_down()
                 # ========== KẾT THÚC PHẦN SỬA LỖI ==========
@@ -971,7 +1046,7 @@ class BaseBot:
                         time.sleep(1)
                         continue
                     
-                    # NẾU CÓ SYMBOL NHƯNG CHƯA CÓ VỊ THẾ, LUÔN PHÂN TÍCH TÍN HIỆU
+                    # NẾU CÓ SYMBOL NHƯNG CHƯA CÓ VỊ THẾ, LUÔN PHÂN TÍCH TÍN HIỆU TOÀN THỊ TRƯỜNG
                     signal = self.get_signal()
                     
                     if signal and signal != "NEUTRAL":
@@ -1255,19 +1330,16 @@ class BaseBot:
                          bot_token=self.telegram_bot_token, 
                          default_chat_id=self.telegram_chat_id)
 
-# ========== BOT VOLUME & NẾN VỚI NHỒI LỆNH ==========
-class VolumeCandleBot(BaseBot):
+# ========== BOT GLOBAL MARKET VỚI NHỒI LỆNH ==========
+class GlobalMarketBot(BaseBot):
     def __init__(self, symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret, 
                  telegram_bot_token, telegram_chat_id, bot_id=None):
         super().__init__(symbol, lev, percent, tp, sl, ws_manager, api_key, api_secret,
-                        telegram_bot_token, telegram_chat_id, "Volume-Candle", bot_id=bot_id)
+                        telegram_bot_token, telegram_chat_id, "Global-Market", bot_id=bot_id)
     
     def get_signal(self):
-        """Bước 2: Phân tích tín hiệu volume và nến cho coin hiện tại"""
-        if not self.symbol:
-            return "NEUTRAL"
-            
-        return self.coin_finder.get_volume_candle_signal(self.symbol)
+        """Sử dụng tín hiệu từ phân tích toàn thị trường"""
+        return self.coin_finder.get_combined_signal()
 
 # ========== BOT MANAGER HOÀN CHỈNH ==========
 class BotManager:
@@ -1285,7 +1357,7 @@ class BotManager:
         
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT VOLUME & NẾN VỚI NHỒI LỆNH FIBONACCI ĐÃ KHỞI ĐỘNG")
+            self.log("🟢 HỆ THỐNG BOT TOÀN THỊ TRƯỜNG VỚI NHỒI LỆNH FIBONACCI ĐÃ KHỞI ĐỘNG")
             
             self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
             self.telegram_thread.start()
@@ -1445,8 +1517,14 @@ class BotManager:
     def send_main_menu(self, chat_id):
         welcome = (
             "🤖 <b>BOT GIAO DỊCH FUTURES ĐA LUỒNG</b>\n\n"
-            "🎯 <b>HỆ THỐNG VOLUME & NẾN VỚI NHỒI LỆNH FIBONACCI</b>\n\n"
-            "📈 <b>CƠ CHẾ NHỒI LỆNH FIBONACCI:</b>\n"
+            "🎯 <b>HỆ THỐNG TOÀN THỊ TRƯỜNG VỚI NHỒI LỆNH FIBONACCI</b>\n\n"
+            "📈 <b>CƠ CHẾ TÍN HIỆU TOÀN THỊ TRƯỜNG:</b>\n"
+            "• Phân tích 100 coin volume cao nhất\n"
+            "• Nến 1 PHÚT - thời gian thực\n"
+            "• Đếm nến xanh/đỏ toàn thị trường\n"
+            "• Nến xanh > 55% → Tín hiệu BUY\n"
+            "• Nến đỏ > 55% → Tín hiệu SELL\n\n"
+            "📊 <b>CƠ CHẾ NHỒI LỆNH FIBONACCI:</b>\n"
             "• Mốc 1: Giá biến động 2%\n"
             "• Mốc 2: Giá biến động 3%\n" 
             "• Mốc 3: Giá biến động 5%\n"
@@ -1469,7 +1547,7 @@ class BotManager:
         
         test_balance = get_balance(self.api_key, self.api_secret)
         if test_balance is None:
-            self.log("❌ LỖI: Không thể kết nối Binance")
+            self.log("❌ LỚI: Không thể kết nối Binance")
             return False
         
         bot_mode = kwargs.get('bot_mode', 'static')
@@ -1483,7 +1561,7 @@ class BotManager:
                     if bot_id in self.bots:
                         continue
                     
-                    bot_class = VolumeCandleBot
+                    bot_class = GlobalMarketBot
                     
                     if not bot_class:
                         continue
@@ -1498,7 +1576,7 @@ class BotManager:
                     if bot_id in self.bots:
                         continue
                     
-                    bot_class = VolumeCandleBot
+                    bot_class = GlobalMarketBot
                     
                     if not bot_class:
                         continue
@@ -1517,8 +1595,8 @@ class BotManager:
         
         if created_count > 0:
             success_msg = (
-                f"✅ <b>ĐÃ TẠO {created_count}/{bot_count} BOT VOLUME & NẾN</b>\n\n"
-                f"🎯 Hệ thống: Volume & Candle Analysis\n"
+                f"✅ <b>ĐÃ TẠO {created_count}/{bot_count} BOT TOÀN THỊ TRƯỜNG</b>\n\n"
+                f"🎯 Hệ thống: Global Market Analysis\n"
                 f"💰 Đòn bẩy: {lev}x\n"
                 f"📈 % Số dư: {percent}%\n"
                 f"🎯 TP: {tp}%\n"
@@ -1531,8 +1609,9 @@ class BotManager:
             else:
                 success_msg += f"🔗 Coin: Tự động tìm kiếm\n"
             
-            success_msg += f"\n🎯 <b>CƠ CHẾ NHỒI LỆNH FIBONACCI ĐÃ KÍCH HOẠT</b>\n"
-            success_msg += f"📊 Mốc nhồi: 2%, 3%, 5%, 8%, 13%, 21%, 34%\n"
+            success_msg += f"\n🎯 <b>TÍN HIỆU TOÀN THỊ TRƯỜNG ĐÃ KÍCH HOẠT</b>\n"
+            success_msg += f"📊 Phân tích 100 coin volume cao\n"
+            success_msg += f"⏰ Nến 1 phút - thời gian thực\n"
             success_msg += f"🔄 Mỗi bot là 1 vòng lặp độc lập"
             
             self.log(success_msg)
@@ -1595,6 +1674,8 @@ class BotManager:
     def _handle_telegram_message(self, chat_id, text):
         user_state = self.user_states.get(chat_id, {})
         current_step = user_state.get('step')
+        
+        # Xử lý các bước tạo bot (giữ nguyên từ code cũ)
         if current_step == 'waiting_bot_count':
             if text == '❌ Hủy bỏ':
                 self.user_states[chat_id] = {}
@@ -1662,10 +1743,10 @@ class BotManager:
                 self.user_states[chat_id] = {}
                 send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
                             self.telegram_bot_token, self.telegram_chat_id)
-            elif text in ["📊 Volume & Nến System"]:
+            elif text in ["📊 Global Market System"]:
                 
                 strategy_map = {
-                    "📊 Volume & Nến System": "Volume-Candle"
+                    "📊 Global Market System": "Global-Market"
                 }
                 
                 strategy = strategy_map[text]
@@ -1673,7 +1754,7 @@ class BotManager:
                 user_state['step'] = 'waiting_exit_strategy'
                 
                 strategy_descriptions = {
-                    "Volume-Candle": "Phân tích Volume & Nến trên 3 khung thời gian"
+                    "Global-Market": "Phân tích toàn thị trường - 100 coin volume cao"
                 }
                 
                 description = strategy_descriptions.get(strategy, "")
@@ -1870,9 +1951,10 @@ class BotManager:
                         if bot_mode == 'static' and symbol:
                             success_msg += f"\n🔗 Coin: {symbol}"
                         
-                        success_msg += f"\n\n🎯 <b>Mỗi bot là 1 vòng lặp độc lập</b>\n"
-                        success_msg += f"🔄 <b>Tự reset hoàn toàn sau mỗi lệnh</b>\n"
-                        success_msg += f"📊 <b>Tự tìm coin & trade độc lập</b>"
+                        success_msg += f"\n\n🎯 <b>TÍN HIỆU TOÀN THỊ TRƯỜNG ĐÃ KÍCH HOẠT</b>\n"
+                        success_msg += f"📊 Phân tích 100 coin volume cao\n"
+                        success_msg += f"⏰ Nến 1 phút - thời gian thực\n"
+                        success_msg += f"🔄 Mỗi bot là 1 vòng lặp độc lập"
                         
                         send_telegram(success_msg, chat_id, create_main_menu(),
                                     self.telegram_bot_token, self.telegram_chat_id)
@@ -2032,36 +2114,33 @@ class BotManager:
         
         elif text == "🎯 Chiến lược":
             strategy_info = (
-                "🎯 <b>HỆ THỐNG PHÂN TÍCH VOLUME & NẾN</b>\n\n"
+                "🎯 <b>HỆ THỐNG PHÂN TÍCH TOÀN THỊ TRƯỜNG</b>\n\n"
                 
                 "📊 <b>Nguyên tắc giao dịch:</b>\n"
-                "• Volume tăng + nến xanh → MUA\n"
-                "• Volume tăng + nến đỏ → BÁN\n"  
-                "• Volume giảm + nến thân nhỏ → MUA\n"
+                "• Phân tích 100 coin volume cao nhất\n"
+                "• Nến 1 PHÚT - thời gian thực\n"
+                "• Đếm tổng số nến xanh/đỏ toàn thị trường\n"
+                "• Nến xanh > 55% → Tín hiệu BUY\n"
+                "• Nến đỏ > 55% → Tín hiệu SELL\n"
                 "• Còn lại → BỎ QUA\n\n"
-                
-                "⏰ <b>Khung thời gian phân tích:</b>\n"
-                "• 1 phút - Tín hiệu nhanh\n"
-                "• 5 phút - Trung hạn\n"
-                "• 15 phút - Xu hướng chính\n\n"
                 
                 "⚖️ <b>Cân bằng vị thế:</b>\n"
                 "• Đếm tổng số LONG/SHORT trên Binance\n"
-                "• Ưu tiên hướng NGƯỢC với số lượng nhiều hơn\n"
+                "• Kết hợp với tín hiệu toàn thị trường\n"
                 "• Đảm bảo đa dạng hóa rủi ro\n\n"
                 
-                "🔍 <b>Lọc đòn bẩy thông minh:</b>\n"
-                "• Tự động kiểm tra đòn bẩy tối đa của coin\n"
-                "• Chỉ chọn coin hỗ trợ đòn bẩy mong muốn\n"
-                "• Tránh lỗi khi đặt lệnh\n\n"
+                "🔍 <b>Lọc coin thông minh:</b>\n"
+                "• Tự động chọn ngẫu nhiên từ 600 coin\n"
+                "• Kiểm tra đòn bẩy tối đa của coin\n"
+                "• Tránh trùng lặp với các bot khác\n\n"
                 
                 "🔄 <b>Quy trình tìm coin:</b>\n"
-                "1. Xác định hướng ưu tiên (cân bằng vị thế)\n"
-                "2. Quét ngẫu nhiên 600 coin\n"
-                "3. Kiểm tra đòn bẩy hỗ trợ\n"
-                "4. Phân tích Volume & Nến 3 khung\n"
-                "5. Chọn coin cùng hướng ưu tiên\n"
-                "6. Vào lệnh và quản lý TP/SL"
+                "1. Phân tích toàn thị trường (100 coin volume cao)\n"
+                "2. Xác định hướng ưu tiên (BUY/SELL)\n"
+                "3. Quét ngẫu nhiên 600 coin\n"
+                "4. Kiểm tra đòn bẩy hỗ trợ\n"
+                "5. Chọn coin không trùng lặp\n"
+                "6. Vào lệnh và quản lý TP/SL + Nhồi lệnh Fibonacci"
             )
             send_telegram(strategy_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
