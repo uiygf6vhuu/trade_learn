@@ -915,7 +915,7 @@ class BaseBot:
                 executed_qty = float(result.get('executedQty', 0))
                 avg_price = float(result.get('avgPrice', current_price))
                 
-                if executed_qty > 0:
+                if executed_qty >= 0:
                     # Cập nhật giá trung bình và khối lượng
                     total_qty = abs(self.qty) + executed_qty
                     self.entry = (abs(self.qty) * self.entry + executed_qty * avg_price) / total_qty
