@@ -789,7 +789,7 @@ class BaseBot:
         
         self.current_target_direction = None
         self.last_find_time = 0
-        self.find_interval = 60
+        self.find_interval = 30
         
         # ========== BIẾN QUẢN LÝ NHỒI LỆNH FIBONACCI ==========
         self.entry_base = 0  # Giá vào gốc ban đầu
@@ -1105,6 +1105,13 @@ class BaseBot:
         try:
             # Kiểm tra vị thế hiện tại
             self.check_position_status()
+            # XÁC NHẬN TÍN HIỆU LẦN CUỐI TRƯỚC KHI VÀO LỆNH
+            confirm_signal = self.coin_finder.get_combined_signal()
+            
+            if confirm_signal != side:
+                self.log(f"⚠️ Hủy mở lệnh: Tín hiệu đổi từ {side} → {confirm_signal}")
+                return False
+
             if self.position_open:
                 self.log(f"⚠️ Đã có vị thế {self.side}, bỏ qua tín hiệu {side}")
                 return False
