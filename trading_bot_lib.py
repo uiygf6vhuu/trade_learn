@@ -749,6 +749,8 @@ class SmartCoinFinder:
         self.api_key = api_key
         self.api_secret = api_secret
         self.global_analyzer = GlobalMarketAnalyzer(api_key, api_secret)
+        self._leverage_cache = {}  # Cache để lưu danh sách coin theo đòn bẩy
+        self._cache_time = 300  # 5 phút cache
         
     def get_global_market_signal(self):
         """Chỉ sử dụng tín hiệu từ phân tích toàn thị trường (100 coin volume cao)"""
@@ -758,36 +760,122 @@ class SmartCoinFinder:
         """Lấy đòn bẩy tối đa của symbol"""
         return get_max_leverage(symbol, self.api_key, self.api_secret)
     
-    def find_best_coin(self, target_direction, excluded_coins=None):
-        """Tìm coin tốt nhất - DÙNG COIN BIẾN ĐỘNG MẠNH NHẤT"""
+    def get_symbols_by_leverage(self, min_leverage=10):
+        """Lấy tất cả các coin có đòn bẩy tối đa >= min_leverage"""
+        cache_key = f"leverage_{min_leverage}"
+        current_time = time.time()
+        
+        # Kiểm tra cache
+        if cache_key in self._leverage_cache:
+            cache_data = self._leverage_cache[cache_key]
+            if current_time - cache_data['timestamp'] < self._cache_time:
+                logger.info(f"✅ Sử dụng cache đòn bẩy {min_leverage}x: {len(cache_data['symbols'])} coin")
+                return cache_data['symbols']
+        
         try:
-            # Lấy top coin biến động mạnh nhất 1 giờ
-            volatile_symbols = get_top_volatile_symbols(limit=30)
+            logger.info(f"🔄 Đang lọc coin hỗ trợ đòn bẩy ≥ {min_leverage}x...")
+            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            data = binance_api_request(url)
+            if not data:
+                logger.error("❌ Không lấy được exchangeInfo")
+                return []
+            
+            eligible_symbols = []
+            total_symbols = 0
+            
+            for symbol_info in data.get('symbols', []):
+                symbol = symbol_info.get('symbol', '')
+                if not symbol.endswith('USDT') or symbol_info.get('status') != 'TRADING':
+                    continue
+                
+                total_symbols += 1
+                max_leverage = 1  # Mặc định
+                
+                # Tìm đòn bẩy tối đa từ filters
+                for f in symbol_info.get('filters', []):
+                    if f.get('filterType') == 'LEVERAGE' and 'maxLeverage' in f:
+                        max_leverage = int(f['maxLeverage'])
+                        break
+                
+                if max_leverage >= min_leverage:
+                    eligible_symbols.append(symbol)
+            
+            # Lưu vào cache
+            self._leverage_cache[cache_key] = {
+                'symbols': eligible_symbols,
+                'timestamp': current_time
+            }
+            
+            logger.info(f"✅ Đã lọc {len(eligible_symbols)}/{total_symbols} coin hỗ trợ đòn bẩy ≥ {min_leverage}x")
+            return eligible_symbols
+            
+        except Exception as e:
+            logger.error(f"❌ Lỗi lọc coin theo đòn bẩy: {str(e)}")
+            return []
+    
+    def find_best_coin(self, target_direction, excluded_coins=None, min_leverage=10):
+        """Tìm coin tốt nhất - LỌC THEO ĐÒN BẨY TRƯỚC, SAU ĐÓ THEO BIẾN ĐỘNG"""
+        try:
+            # BƯỚC 1: Lọc tất cả coin thỏa mãn đòn bẩy trước
+            leverage_symbols = self.get_symbols_by_leverage(min_leverage)
+            if not leverage_symbols:
+                logger.error(f"❌ Không có coin nào hỗ trợ đòn bẩy ≥ {min_leverage}x")
+                return None
+            
+            # BƯỚC 2: Lấy top coin biến động mạnh nhất 24h
+            volatile_symbols = get_top_volatile_symbols(limit=100)  # Lấy nhiều hơn để lọc
             
             if not volatile_symbols:
                 logger.warning("❌ Không tìm thấy coin biến động mạnh")
-                return None
+                # Fallback: lấy top volume nếu không có biến động
+                volatile_symbols = get_top_volume_symbols(limit=50)
             
-            # Thử các coin biến động mạnh nhất trước
+            # BƯỚC 3: Kết hợp cả hai điều kiện - coin vừa có đòn bẩy đủ vừa có biến động
+            combined_symbols = []
+            
             for symbol in volatile_symbols:
-                if excluded_coins and symbol in excluded_coins:
-                    continue
-                
-                max_lev = self.get_symbol_leverage(symbol)
-                if max_lev < 10:  # Chỉ chọn coin có đòn bẩy >= 10x
-                    continue
-                
-                current_price = get_current_price(symbol)
-                if current_price <= 0:
-                    continue
+                if symbol in leverage_symbols:
+                    if excluded_coins and symbol in excluded_coins:
+                        continue
+                    combined_symbols.append(symbol)
+            
+            if not combined_symbols:
+                logger.warning(f"⚠️ Không tìm thấy coin vừa có đòn bẩy ≥ {min_leverage}x vừa biến động mạnh")
+                # Thử tìm bất kỳ coin nào có đòn bẩy đủ
+                for symbol in leverage_symbols[:20]:  # Thử 20 coin đầu
+                    if excluded_coins and symbol in excluded_coins:
+                        continue
+                    combined_symbols.append(symbol)
+            
+            # BƯỚC 4: Thử các coin đã lọc
+            for symbol in combined_symbols[:10]:  # Thử 10 coin đầu
+                try:
+                    # Kiểm tra lại đòn bẩy cho chắc chắn
+                    max_lev = self.get_symbol_leverage(symbol)
+                    if max_lev < min_leverage:
+                        continue
                     
-                logger.info(f"✅ Tìm thấy coin biến động: {symbol} - Đòn bẩy: {max_lev}x")
-                return symbol
+                    # Kiểm tra giá hiện tại
+                    current_price = get_current_price(symbol)
+                    if current_price <= 0:
+                        continue
+                    
+                    # Kiểm tra biến động 1 giờ
+                    volatility = _get_1h_volatility(symbol)
+                    if volatility and volatility < 0.5:  # Ít nhất 0.5% biến động 1h
+                        continue
+                        
+                    logger.info(f"✅ Tìm thấy coin phù hợp: {symbol} - Đòn bẩy: {max_lev}x - Biến động 1h: {volatility:.2f}%")
+                    return symbol
+                    
+                except Exception as e:
+                    logger.error(f"❌ Lỗi kiểm tra coin {symbol}: {str(e)}")
+                    continue
             
             return None
             
         except Exception as e:
-            logger.error(f"Lỗi tìm coin: {str(e)}")
+            logger.error(f"❌ Lỗi tìm coin: {str(e)}")
             return None
 
 # ========== WEBSOCKET MANAGER ==========
@@ -1011,7 +1099,7 @@ class BaseBot:
         # KHÔNG reset symbol: self.symbol = None
 
     def find_and_set_coin(self):
-        """Tìm và thiết lập coin mới cho bot - DÙNG COIN BIẾN ĐỘNG MẠNH"""
+        """Tìm và thiết lập coin mới cho bot - LỌC THEO ĐÒN BẨY TRƯỚC"""
         try:
             current_time = time.time()
             if current_time - self.last_find_time < self.find_interval:
@@ -1028,10 +1116,11 @@ class BaseBot:
             # Lấy danh sách coin đang active để tránh trùng lặp
             active_coins = self.coin_manager.get_active_coins()
             
-            # Bước 2: Tìm coin biến động mạnh phù hợp
+            # Bước 2: Tìm coin - TRUYỀN ĐÒN BẨY TỐI THIỂU VÀO
             new_symbol = self.coin_finder.find_best_coin(
                 target_direction, 
-                excluded_coins=active_coins
+                excluded_coins=active_coins,
+                min_leverage=self.lev  # TRUYỀN ĐÒN BẨY TỐI THIỂU
             )
             
             if new_symbol:
@@ -1056,7 +1145,7 @@ class BaseBot:
                     # Đặt hướng cho lệnh đầu tiên
                     self.next_side = target_direction
                     
-                    self.log(f"🎯 Đã tìm thấy coin biến động: {new_symbol} - Hướng ưu tiên: {target_direction}")
+                    self.log(f"🎯 Đã tìm thấy coin phù hợp: {new_symbol} - Đòn bẩy: {max_lev}x - Hướng ưu tiên: {target_direction}")
                     return True
             
             return False
@@ -1064,7 +1153,6 @@ class BaseBot:
         except Exception as e:
             self.log(f"❌ Lỗi tìm coin: {str(e)}")
             return False
-
     def verify_leverage_and_switch(self):
         """Kiểm tra và chuyển đổi đòn bẩy nếu cần"""
         if not self.symbol:
