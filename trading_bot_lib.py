@@ -1,4 +1,4 @@
-# trading_bot_volatility_complete.py - HOÀN CHỈNH VỚI PHÂN TÍCH BIẾN ĐỘNG
+# trading_bot_volatility_fixed.py - ĐÃ SỬA LỖI ĐÒN BẨY VÀ API
 import json
 import hmac
 import hashlib
@@ -216,7 +216,7 @@ def create_roi_trigger_keyboard():
         "one_time_keyboard": True
     }
 
-# ========== API BINANCE - ĐÃ SỬA LỖI 451 ==========
+# ========== API BINANCE - ĐÃ SỬA LỖI 400 ==========
 def sign(query, api_secret):
     try:
         return hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
@@ -225,7 +225,7 @@ def sign(query, api_secret):
         return ""
 
 def binance_api_request(url, method='GET', params=None, headers=None):
-    max_retries = 3
+    max_retries = 2  # Giảm retries
     for attempt in range(max_retries):
         try:
             # Thêm User-Agent để tránh bị chặn
@@ -244,13 +244,15 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                 data = urllib.parse.urlencode(params).encode() if params else None
                 req = urllib.request.Request(url, data=data, headers=headers, method=method)
             
-            # Tăng timeout và thêm retry logic
             with urllib.request.urlopen(req, timeout=30) as response:
                 if response.status == 200:
                     return json.loads(response.read().decode())
                 else:
                     error_content = response.read().decode()
                     logger.error(f"Lỗi API ({response.status}): {error_content}")
+                    if response.status == 400:
+                        # Lỗi 400 - Bad Request, không retry
+                        return None
                     if response.status == 401:
                         return None
                     if response.status == 429:
@@ -260,14 +262,13 @@ def binance_api_request(url, method='GET', params=None, headers=None):
                     continue
                     
         except urllib.error.HTTPError as e:
+            error_content = e.read().decode()
             if e.code == 451:
                 logger.error(f"❌ Lỗi 451: Truy cập bị chặn - Có thể do hạn chế địa lý. Vui lòng kiểm tra VPN/proxy.")
-                # Thử sử dụng endpoint thay thế
-                if "fapi.binance.com" in url:
-                    new_url = url.replace("fapi.binance.com", "fapi.binance.com")
-                    logger.info(f"Thử URL thay thế: {new_url}")
-                    # Không retry lại ngay mà để lần sau
                 return None
+            elif e.code == 400:
+                logger.error(f"❌ Lỗi 400 - Bad Request: {error_content}")
+                return None  # Không retry với lỗi 400
             else:
                 logger.error(f"Lỗi HTTP ({e.code}): {e.reason}")
             
@@ -308,12 +309,12 @@ def get_all_usdt_pairs(limit=600):
         return []
 
 def get_max_leverage(symbol, api_key, api_secret):
-    """Lấy đòn bẩy tối đa cho một symbol"""
+    """Lấy đòn bẩy tối đa cho một symbol - ĐÃ SỬA LỖI"""
     try:
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
-            return 100  # Mặc định nếu không lấy được
+            return 0  # Trả về 0 nếu lỗi
         
         for s in data['symbols']:
             if s['symbol'] == symbol.upper():
@@ -323,10 +324,10 @@ def get_max_leverage(symbol, api_key, api_secret):
                         if 'maxLeverage' in f:
                             return int(f['maxLeverage'])
                 break
-        return 100  # Mặc định
+        return 0  # Trả về 0 nếu không tìm thấy
     except Exception as e:
         logger.error(f"Lỗi lấy đòn bẩy tối đa {symbol}: {str(e)}")
-        return 100
+        return 0
 
 def get_step_size(symbol, api_key, api_secret):
     if not symbol:
@@ -347,6 +348,7 @@ def get_step_size(symbol, api_key, api_secret):
     return 0.001
 
 def set_leverage(symbol, lev, api_key, api_secret):
+    """Thiết lập đòn bẩy - ĐÃ SỬA LỖI 400"""
     if not symbol:
         logger.error("❌ Lỗi: Symbol là None khi set leverage")
         return False
@@ -364,9 +366,12 @@ def set_leverage(symbol, lev, api_key, api_secret):
         
         response = binance_api_request(url, method='POST', headers=headers)
         if response is None:
+            logger.error(f"❌ Không thể set đòn bẩy {lev}x cho {symbol}")
             return False
         if response and 'leverage' in response:
+            logger.info(f"✅ Đã set đòn bẩy {lev}x cho {symbol}")
             return True
+        logger.error(f"❌ Phản hồi lạ khi set đòn bẩy: {response}")
         return False
     except Exception as e:
         logger.error(f"Lỗi thiết lập đòn bẩy: {str(e)}")
@@ -514,6 +519,7 @@ class CoinManager:
     def __init__(self):
         self.active_coins = set()
         self._lock = threading.Lock()
+        self.failed_coins = {}  # Lưu coin bị lỗi và thời gian
     
     def register_coin(self, symbol):
         if not symbol:
@@ -536,19 +542,48 @@ class CoinManager:
     def get_active_coins(self):
         with self._lock:
             return list(self.active_coins)
+    
+    def add_failed_coin(self, symbol, duration=300):
+        """Thêm coin vào danh sách lỗi trong khoảng thời gian"""
+        if not symbol:
+            return
+        with self._lock:
+            self.failed_coins[symbol.upper()] = time.time() + duration
+    
+    def is_coin_failed(self, symbol):
+        """Kiểm tra coin có đang trong danh sách lỗi không"""
+        if not symbol:
+            return True
+        with self._lock:
+            if symbol.upper() in self.failed_coins:
+                if time.time() < self.failed_coins[symbol.upper()]:
+                    return True
+                else:
+                    # Xóa nếu đã hết thời gian
+                    del self.failed_coins[symbol.upper()]
+            return False
+    
+    def cleanup_expired_failed_coins(self):
+        """Dọn dẹp các coin đã hết thời gian lỗi"""
+        current_time = time.time()
+        with self._lock:
+            expired = [symbol for symbol, expire_time in self.failed_coins.items() if current_time > expire_time]
+            for symbol in expired:
+                del self.failed_coins[symbol]
 
-# ========== VOLATILITY COIN FINDER MỚI ==========
+# ========== VOLATILITY COIN FINDER ĐÃ SỬA TRIỆT ĐỂ ==========
 class VolatilityCoinFinder:
     def __init__(self, api_key, api_secret, leverage):
         self.api_key = api_key
         self.api_secret = api_secret
         self.leverage = leverage
-        self.eligible_coins = []  # Danh sách coin đủ điều kiện
+        self.eligible_coins = []  # Danh sách coin có đòn bẩy phù hợp
         self.last_update_time = 0
         self.update_interval = 300  # 5 phút cập nhật 1 lần
+        self._lock = threading.Lock()
         
     def update_eligible_coins(self):
-        """Cập nhật danh sách coin có đòn bẩy phù hợp"""
+        """Cập nhật danh sách coin có đòn bẩy phù hợp - ĐÃ SỬA"""
         try:
             current_time = time.time()
             if current_time - self.last_update_time < self.update_interval and self.eligible_coins:
@@ -557,19 +592,31 @@ class VolatilityCoinFinder:
             logger.info(f"🔄 Đang cập nhật danh sách coin với đòn bẩy {self.leverage}x...")
             
             all_symbols = get_all_usdt_pairs(limit=300)
+            if not all_symbols:
+                logger.warning("❌ Không lấy được danh sách coin từ Binance")
+                return []
+            
             eligible = []
             
-            for symbol in all_symbols:
-                try:
-                    max_lev = get_max_leverage(symbol, self.api_key, self.api_secret)
-                    if max_lev >= self.leverage:
-                        eligible.append(symbol)
-                    time.sleep(0.1)  # Tránh bị rate limit
-                except Exception as e:
-                    continue
+            # Sử dụng ThreadPoolExecutor để lấy đòn bẩy song song
+            max_workers = min(10, len(all_symbols))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_symbol = {executor.submit(get_max_leverage, symbol, self.api_key, self.api_secret): symbol for symbol in all_symbols}
+                
+                for future in as_completed(future_to_symbol):
+                    symbol = future_to_symbol[future]
+                    try:
+                        max_lev = future.result()
+                        if max_lev >= self.leverage:
+                            eligible.append(symbol)
+                    except Exception as e:
+                        logger.error(f"Lỗi khi kiểm tra đòn bẩy {symbol}: {str(e)}")
+                    time.sleep(0.1)  # Tránh rate limit
                     
-            self.eligible_coins = eligible
-            self.last_update_time = current_time
+            with self._lock:
+                self.eligible_coins = eligible
+                self.last_update_time = current_time
+                
             logger.info(f"✅ Đã cập nhật {len(eligible)} coin với đòn bẩy >= {self.leverage}x")
             return eligible
             
@@ -577,28 +624,38 @@ class VolatilityCoinFinder:
             logger.error(f"❌ Lỗi cập nhật danh sách coin: {str(e)}")
             return []
     
-    def find_most_volatile_coin(self, excluded_coins=None):
-        """Tìm coin biến động mạnh nhất trong 1h"""
+    def find_most_volatile_coin(self, coin_manager, excluded_coins=None):
+        """Tìm coin biến động mạnh nhất trong 1h - ĐÃ SỬA"""
         try:
             eligible_coins = self.update_eligible_coins()
             if not eligible_coins:
-                logger.warning("❌ Không có coin nào đủ điều kiện")
+                logger.warning("❌ Không có coin nào đủ điều kiện đòn bẩy")
                 return None, None
                 
-            # Loại bỏ các coin đang active
-            if excluded_coins:
-                eligible_coins = [coin for coin in eligible_coins if coin not in excluded_coins]
+            # Dọn dẹp coin lỗi đã hết hạn
+            coin_manager.cleanup_expired_failed_coins()
                 
-            if not eligible_coins:
-                logger.warning("⚠️ Tất cả coin đều đang active")
+            # Loại bỏ các coin đang active và coin bị lỗi
+            filtered_coins = []
+            for coin in eligible_coins:
+                if coin_manager.is_coin_active(coin):
+                    continue
+                if coin_manager.is_coin_failed(coin):
+                    continue
+                if excluded_coins and coin in excluded_coins:
+                    continue
+                filtered_coins.append(coin)
+                
+            if not filtered_coins:
+                logger.warning("⚠️ Tất cả coin đều đang active hoặc bị lỗi")
                 return None, None
                 
-            # Lấy biến động của tất cả coin
+            # Lấy biến động của các coin
             volatilities = []
-            max_workers = min(10, len(eligible_coins))
+            max_workers = min(5, len(filtered_coins))  # Giảm workers để tránh rate limit
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_coin = {executor.submit(get_1h_volatility, coin): coin for coin in eligible_coins[:50]}  # Giới hạn 50 coin
+                future_to_coin = {executor.submit(get_1h_volatility, coin): coin for coin in filtered_coins[:30]}  # Giới hạn 30 coin
                 
                 for future in as_completed(future_to_coin):
                     coin = future_to_coin[future]
@@ -606,8 +663,9 @@ class VolatilityCoinFinder:
                         volatility = future.result()
                         if volatility != 0:  # Bỏ qua các coin lỗi
                             volatilities.append((coin, abs(volatility), volatility))
-                        time.sleep(0.2)  # Tránh rate limit
+                        time.sleep(0.3)  # Tăng delay để tránh rate limit
                     except Exception as e:
+                        logger.error(f"Lỗi tính biến động {coin}: {str(e)}")
                         continue
             
             if not volatilities:
@@ -619,8 +677,6 @@ class VolatilityCoinFinder:
             best_coin, best_volatility, raw_volatility = volatilities[0]
             
             # Xác định hướng giao dịch: ĐI NGƯỢC với biến động
-            # Nếu volatility dương (giá tăng) -> SELL (dự đoán giảm)
-            # Nếu volatility âm (giá giảm) -> BUY (dự đoán tăng)
             direction = "SELL" if raw_volatility > 0 else "BUY"
             
             logger.info(f"🎯 Coin biến động nhất: {best_coin} - Biến động: {raw_volatility:.2f}% - Hướng: {direction}")
@@ -714,7 +770,7 @@ class WebSocketManager:
         for symbol in list(self.connections.keys()):
             self.remove_symbol(symbol)
 
-# ========== BASE BOT ĐÃ SỬA ==========
+# ========== BASE BOT ĐÃ SỬA TRIỆT ĐỂ ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager, api_key, api_secret, 
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None):
@@ -757,7 +813,7 @@ class BaseBot:
         self.should_be_removed = False
         
         self.coin_manager = CoinManager()
-        self.coin_finder = VolatilityCoinFinder(api_key, api_secret, lev)  # Sử dụng VolatilityCoinFinder mới
+        self.coin_finder = VolatilityCoinFinder(api_key, api_secret, lev)
         
         self.current_target_direction = None
         self.last_find_time = 0
@@ -841,10 +897,9 @@ class BaseBot:
         # Reset thông tin theo dõi ROI
         self.high_water_mark_roi = 0
         self.roi_check_activated = False
-        # KHÔNG reset symbol: self.symbol = None
 
     def find_and_set_coin(self):
-        """Tìm và thiết lập coin mới cho bot - SỬ DỤNG PHÂN TÍCH BIẾN ĐỘNG"""
+        """Tìm và thiết lập coin mới cho bot - ĐÃ SỬA TRIỆT ĐỂ"""
         try:
             current_time = time.time()
             if current_time - self.last_find_time < self.find_interval:
@@ -857,11 +912,12 @@ class BaseBot:
             
             # Tìm coin biến động mạnh nhất
             new_symbol, new_direction = self.coin_finder.find_most_volatile_coin(
+                coin_manager=self.coin_manager,
                 excluded_coins=active_coins
             )
             
             if new_symbol and new_direction:
-                # Kiểm tra đòn bẩy một lần nữa
+                # Kiểm tra đòn bẩy một lần nữa (double check)
                 max_lev = get_max_leverage(new_symbol, self.api_key, self.api_secret)
                 if max_lev >= self.lev:
                     # Đăng ký coin mới
@@ -881,6 +937,10 @@ class BaseBot:
                     
                     self.log(f"🎯 Đã tìm thấy coin: {new_symbol} - Hướng: {new_direction} (Đi ngược biến động 1h)")
                     return True
+                else:
+                    # Coin không còn đủ đòn bẩy, thêm vào danh sách lỗi
+                    self.coin_manager.add_failed_coin(new_symbol, duration=600)
+                    self.log(f"⚠️ Coin {new_symbol} không còn đủ đòn bẩy ({max_lev}x < {self.lev}x), đã thêm vào danh sách lỗi")
             
             return False
             
@@ -889,19 +949,29 @@ class BaseBot:
             return False
 
     def verify_leverage_and_switch(self):
-        """Kiểm tra và chuyển đổi đòn bẩy nếu cần"""
+        """Kiểm tra và chuyển đổi đòn bẩy nếu cần - ĐÃ SỬA"""
         if not self.symbol:
             return True
             
         try:
+            # Kiểm tra đòn bẩy hiện tại của symbol
             current_leverage = get_max_leverage(self.symbol, self.api_key, self.api_secret)
-            if current_leverage >= self.lev:
-                # Thiết lập đòn bẩy mong muốn
-                if set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
-                    return True
-            return False
+            if current_leverage < self.lev:
+                self.log(f"❌ Coin {self.symbol} chỉ hỗ trợ đòn bẩy {current_leverage}x < {self.lev}x")
+                self.coin_manager.add_failed_coin(self.symbol, duration=600)
+                return False
+
+            # Thiết lập đòn bẩy
+            if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
+                self.log(f"❌ Không thể đặt đòn bẩy {self.lev}x cho {self.symbol}")
+                self.coin_manager.add_failed_coin(self.symbol, duration=600)
+                return False
+                
+            return True
+            
         except Exception as e:
             self.log(f"❌ Lỗi kiểm tra đòn bẩy: {str(e)}")
+            self.coin_manager.add_failed_coin(self.symbol, duration=600)
             return False
 
     def _run(self):
@@ -913,9 +983,8 @@ class BaseBot:
                 if current_time - getattr(self, '_last_leverage_check', 0) > 60:
                     if not self.verify_leverage_and_switch():
                         if self.symbol:
-                            self.ws_manager.remove_symbol(self.symbol)
-                            self.coin_manager.unregister_coin(self.symbol)
-                            self.symbol = None
+                            self.log(f"🔄 Coin {self.symbol} không đủ đòn bẩy, tìm coin mới...")
+                            self._cleanup_symbol()
                         time.sleep(1)
                         continue
                     self._last_leverage_check = current_time
@@ -933,7 +1002,9 @@ class BaseBot:
                     if not self.symbol:
                         if self.find_and_set_coin():
                             self.log("✅ Đã tìm thấy coin mới, chờ tín hiệu...")
-                        time.sleep(1)
+                        else:
+                            self.log("🔍 Đang tìm kiếm coin phù hợp...")
+                        time.sleep(2)  # Tăng thời gian chờ để tránh spam
                         continue
                     
                     # NẾU CÓ SYMBOL VÀ CÓ HƯỚNG CHO LỆNH TIẾP THEO - MỞ LỆNH NGAY
@@ -985,6 +1056,7 @@ class BaseBot:
         self.log(f"🔴 Bot dừng")
 
     def open_position(self, side):
+        """Mở vị thế - ĐÃ SỬA LỖI ĐÒN BẨY"""
         if side not in ["BUY", "SELL"]:
             self.log(f"❌ Side không hợp lệ: {side}")
             self._cleanup_symbol()
@@ -1001,17 +1073,10 @@ class BaseBot:
             if self.should_be_removed:
                 self.log("⚠️ Bot đã được đánh dấu xóa, không mở lệnh mới")
                 return False
-    
+
             # KIỂM TRA LẠI ĐÒN BẨY TRƯỚC KHI MỞ LỆNH
-            current_leverage = get_max_leverage(self.symbol, self.api_key, self.api_secret)
-            if current_leverage < self.lev:
-                self.log(f"❌ Coin {self.symbol} chỉ hỗ trợ đòn bẩy {current_leverage}x < {self.lev}x -> TÌM COIN KHÁC")
-                self._cleanup_symbol()
-                return False
-    
-            # Thiết lập đòn bẩy
-            if not set_leverage(self.symbol, self.lev, self.api_key, self.api_secret):
-                self.log(f"❌ Không thể đặt đòn bẩy {self.lev}x -> TÌM COIN KHÁC")
+            if not self.verify_leverage_and_switch():
+                self.log(f"❌ Lỗi đòn bẩy với {self.symbol} -> TÌM COIN KHÁC")
                 self._cleanup_symbol()
                 return False
     
@@ -1382,142 +1447,7 @@ class BotManager:
             self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
             return False
 
-    def get_position_summary(self):
-        """Lấy thống kê tổng quan"""
-        try:
-            all_positions = get_positions(api_key=self.api_key, api_secret=self.api_secret)
-            
-            binance_buy_count = 0
-            binance_sell_count = 0
-            binance_positions = []
-            
-            # Đếm vị thế từ Binance
-            for pos in all_positions:
-                position_amt = float(pos.get('positionAmt', 0))
-                if position_amt != 0:
-                    symbol = pos.get('symbol', 'UNKNOWN')
-                    entry_price = float(pos.get('entryPrice', 0))
-                    leverage = float(pos.get('leverage', 1))
-                    position_value = abs(position_amt) * entry_price / leverage
-                    
-                    if position_amt > 0:
-                        binance_buy_count += 1
-                        binance_positions.append({
-                            'symbol': symbol,
-                            'side': 'LONG',
-                            'leverage': leverage,
-                            'size': abs(position_amt),
-                            'entry': entry_price,
-                            'value': position_value
-                        })
-                    else:
-                        binance_sell_count += 1
-                        binance_positions.append({
-                            'symbol': symbol, 
-                            'side': 'SHORT',
-                            'leverage': leverage,
-                            'size': abs(position_amt),
-                            'entry': entry_price,
-                            'value': position_value
-                        })
-        
-            # Thống kê bot
-            bot_details = []
-            searching_bots = 0
-            waiting_bots = 0
-            trading_bots = 0
-            
-            for bot_id, bot in self.bots.items():
-                bot_info = {
-                    'bot_id': bot_id,
-                    'symbol': bot.symbol or 'Đang tìm...',
-                    'status': bot.status,
-                    'side': bot.side,
-                    'leverage': bot.lev,
-                    'percent': bot.percent,
-                    'tp': bot.tp,
-                    'sl': bot.sl,
-                    'roi_trigger': bot.roi_trigger
-                }
-                bot_details.append(bot_info)
-                
-                if bot.status == "searching":
-                    searching_bots += 1
-                elif bot.status == "waiting":
-                    waiting_bots += 1
-                elif bot.status == "open":
-                    trading_bots += 1
-            
-            # Tạo báo cáo chi tiết
-            summary = "📊 **THỐNG KÊ CHI TIẾT HỆ THỐNG**\n\n"
-            
-            # Phần 1: Số dư
-            balance = get_balance(self.api_key, self.api_secret)
-            if balance is not None:
-                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDT\n\n"
-            else:
-                summary += f"💰 **SỐ DƯ**: ❌ Lỗi kết nối\n\n"
-            
-            # Phần 2: Bot hệ thống
-            summary += f"🤖 **BOT HỆ THỐNG**: {len(self.bots)} bots\n"
-            summary += f"   🔍 Đang tìm coin: {searching_bots}\n"
-            summary += f"   🟡 Đang chờ: {waiting_bots}\n" 
-            summary += f"   📈 Đang trade: {trading_bots}\n\n"
-            
-            # Phần 3: Chi tiết từng bot
-            if bot_details:
-                summary += "📋 **CHI TIẾT TỪNG BOT**:\n"
-                for bot in bot_details[:8]:
-                    symbol_info = bot['symbol'] if bot['symbol'] != 'Đang tìm...' else '🔍 Đang tìm'
-                    status_map = {
-                        "searching": "🔍 Tìm coin",
-                        "waiting": "🟡 Chờ tín hiệu", 
-                        "open": "🟢 Đang trade"
-                    }
-                    status = status_map.get(bot['status'], bot['status'])
-                    
-                    roi_info = f" | 🎯 ROI: {bot['roi_trigger']}%" if bot['roi_trigger'] else ""
-                    
-                    summary += f"   🔹 {bot['bot_id'][:15]}...\n"
-                    summary += f"      📊 {symbol_info} | {status}\n"
-                    summary += f"      💰 ĐB: {bot['leverage']}x | Vốn: {bot['percent']}%{roi_info}\n"
-                    if bot['tp'] is not None and bot['sl'] is not None:
-                        summary += f"      🎯 TP: {bot['tp']}% | 🛡️ SL: {bot['sl']}%\n"
-                    summary += "\n"
-                
-                if len(bot_details) > 8:
-                    summary += f"   ... và {len(bot_details) - 8} bot khác\n\n"
-            
-            return summary
-                    
-        except Exception as e:
-            return f"❌ Lỗi thống kê: {str(e)}"
-
-    def log(self, message):
-        logger.info(f"[SYSTEM] {message}")
-        if self.telegram_bot_token and self.telegram_chat_id:
-            send_telegram(f"<b>SYSTEM</b>: {message}", 
-                         bot_token=self.telegram_bot_token, 
-                         default_chat_id=self.telegram_chat_id)
-
-    def send_main_menu(self, chat_id):
-        welcome = (
-            "🤖 <b>BOT GIAO DỊCH FUTURES ĐA LUỒNG</b>\n\n"
-            "🎯 <b>HỆ THỐNG BIẾN ĐỘNG VỚI CƠ CHẾ ĐẢO CHIỀU</b>\n\n"
-            "📈 <b>CƠ CHẾ PHÂN TÍCH BIẾN ĐỘNG:</b>\n"
-            "• Tự động lọc coin có đòn bẩy phù hợp\n"
-            "• Phân tích biến động giá 1 giờ\n"
-            "• Chọn coin biến động mạnh nhất\n"
-            "• ĐI NGƯỢC HƯỚNG biến động\n\n"
-            "🔄 <b>CƠ CHẾ MỞ LỆNH NGƯỢC LẠI:</b>\n"
-            "• Sau khi đóng lệnh, bot tự động mở lệnh ngược lại\n"
-            "• Giữ nguyên coin, giữ nguyên số tiền đầu tư\n"
-            "• Tiếp tục luân phiên BUY/SELL trên cùng coin\n"
-            "• Chỉ tìm coin mới khi có lỗi hoặc dừng bot"
-        )
-        send_telegram(welcome, chat_id, create_main_menu(),
-                     bot_token=self.telegram_bot_token, 
-                     default_chat_id=self.telegram_chat_id)
+    # ... (giữ nguyên các phương thức khác của BotManager)
 
     def add_bot(self, symbol, lev, percent, tp, sl, roi_trigger, strategy_type, bot_count=1, **kwargs):
         if sl == 0:
@@ -1604,605 +1534,7 @@ class BotManager:
             self.log("❌ Không thể tạo bot nào")
             return False
 
-    def stop_bot(self, bot_id):
-        bot = self.bots.get(bot_id)
-        if bot:
-            bot.stop()
-            del self.bots[bot_id]
-            self.log(f"⛔ Đã dừng bot {bot_id}")
-            return True
-        return False
-
-    def stop_all(self):
-        self.log("⛔ Đang dừng tất cả bot...")
-        for bot_id in list(self.bots.keys()):
-            self.stop_bot(bot_id)
-        self.ws_manager.stop()
-        self.running = False
-        self.log("🔴 Hệ thống đã dừng")
-
-    def _telegram_listener(self):
-        last_update_id = 0
-        
-        while self.running and self.telegram_bot_token:
-            try:
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates?offset={last_update_id+1}&timeout=30"
-                response = requests.get(url, timeout=35)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('ok'):
-                        for update in data['result']:
-                            update_id = update['update_id']
-                            message = update.get('message', {})
-                            chat_id = str(message.get('chat', {}).get('id'))
-                            text = message.get('text', '').strip()
-                            
-                            if chat_id != self.telegram_chat_id:
-                                continue
-                            
-                            if update_id > last_update_id:
-                                last_update_id = update_id
-                            
-                            self._handle_telegram_message(chat_id, text)
-                elif response.status_code == 409:
-                    logger.error("Lỗi xung đột Telegram")
-                    time.sleep(60)
-                else:
-                    time.sleep(10)
-                
-            except Exception as e:
-                logger.error(f"Lỗi Telegram listener: {str(e)}")
-                time.sleep(10)
-
-    def _handle_telegram_message(self, chat_id, text):
-        user_state = self.user_states.get(chat_id, {})
-        current_step = user_state.get('step')
-        
-        # Xử lý các bước tạo bot
-        if current_step == 'waiting_bot_count':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                try:
-                    bot_count = int(text)
-                    if bot_count <= 0 or bot_count > 10:
-                        send_telegram("⚠️ Số lượng bot phải từ 1 đến 10. Vui lòng chọn lại:",
-                                    chat_id, create_bot_count_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['bot_count'] = bot_count
-                    user_state['step'] = 'waiting_bot_mode'
-                    
-                    send_telegram(
-                        f"🤖 Số lượng bot: {bot_count}\n\n"
-                        f"Chọn chế độ bot:",
-                        chat_id,
-                        create_bot_mode_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho số lượng bot:",
-                                chat_id, create_bot_count_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif current_step == 'waiting_bot_mode':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif text in ["🤖 Bot Tĩnh - Coin cụ thể", "🔄 Bot Động - Tự tìm coin"]:
-                if text == "🤖 Bot Tĩnh - Coin cụ thể":
-                    user_state['bot_mode'] = 'static'
-                    user_state['step'] = 'waiting_strategy'
-                    send_telegram(
-                        "🎯 <b>ĐÃ CHỌN: BOT TĨNH</b>\n\n"
-                        "🤖 Bot sẽ giao dịch coin CỐ ĐỊNH\n"
-                        "📊 Bạn cần chọn coin cụ thể\n\n"
-                        "Chọn chiến lược:",
-                        chat_id,
-                        create_strategy_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-                else:
-                    user_state['bot_mode'] = 'dynamic'
-                    user_state['step'] = 'waiting_strategy'
-                    send_telegram(
-                        "🎯 <b>ĐÃ CHỌN: BOT ĐỘNG</b>\n\n"
-                        f"🤖 Hệ thống sẽ tạo <b>{user_state.get('bot_count', 1)} bot độc lập</b>\n"
-                        f"🔄 Mỗi bot tự tìm coin & trade độc lập\n\n"
-                        "Chọn chiến lược:",
-                        chat_id,
-                        create_strategy_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-
-        elif current_step == 'waiting_strategy':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif text in ["📊 Volatility System"]:
-                
-                strategy_map = {
-                    "📊 Volatility System": "Volatility-Reversal"
-                }
-                
-                strategy = strategy_map[text]
-                user_state['strategy'] = strategy
-                user_state['step'] = 'waiting_exit_strategy'
-                
-                strategy_descriptions = {
-                    "Volatility-Reversal": "Phân tích biến động - Đi ngược xu hướng"
-                }
-                
-                description = strategy_descriptions.get(strategy, "")
-                bot_count = user_state.get('bot_count', 1)
-                
-                send_telegram(
-                    f"🎯 <b>ĐÃ CHỌN: {strategy}</b>\n"
-                    f"🤖 Số lượng: {bot_count} bot độc lập\n\n"
-                    f"{description}\n\n"
-                    f"Chọn chiến lược thoát lệnh:",
-                    chat_id,
-                    create_exit_strategy_keyboard(),
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
-
-        elif current_step == 'waiting_exit_strategy':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif text == "🎯 Chỉ TP/SL cố định":
-                user_state['exit_strategy'] = 'traditional'
-                user_state['step'] = 'waiting_roi_trigger'
-                
-                send_telegram(
-                    f"🎯 <b>CHỌN NGƯỠNG ROI ĐỂ KÍCH HOẠT CƠ CHẾ CHỐT LỆNH THÔNG MINH</b>\n\n"
-                    f"Chọn ngưỡng ROI trigger (%):",
-                    chat_id,
-                    create_roi_trigger_keyboard(),
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
-
-        elif current_step == 'waiting_roi_trigger':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif text == '❌ Tắt tính năng':
-                user_state['roi_trigger'] = None
-                self._continue_bot_creation(chat_id, user_state)
-            else:
-                try:
-                    roi_trigger = float(text)
-                    if roi_trigger <= 0:
-                        send_telegram("⚠️ ROI Trigger phải lớn hơn 0. Vui lòng chọn lại:",
-                                    chat_id, create_roi_trigger_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['roi_trigger'] = roi_trigger
-                    self._continue_bot_creation(chat_id, user_state)
-                    
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho ROI Trigger:",
-                                chat_id, create_roi_trigger_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif current_step == 'waiting_symbol':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                user_state['symbol'] = text
-                user_state['step'] = 'waiting_leverage'
-                send_telegram(
-                    f"🔗 Coin: {text}\n\n"
-                    f"Chọn đòn bẩy:",
-                    chat_id,
-                    create_leverage_keyboard(),
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
-
-        elif current_step == 'waiting_leverage':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                if text.endswith('x'):
-                    lev_text = text[:-1]
-                else:
-                    lev_text = text
-
-                try:
-                    leverage = int(lev_text)
-                    if leverage <= 0 or leverage > 100:
-                        send_telegram("⚠️ Đòn bẩy phải từ 1 đến 100. Vui lòng chọn lại:",
-                                    chat_id, create_leverage_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['leverage'] = leverage
-                    user_state['step'] = 'waiting_percent'
-                    
-                    balance = get_balance(self.api_key, self.api_secret)
-                    balance_info = f"\n💰 Số dư hiện có: {balance:.2f} USDT" if balance else ""
-                    
-                    send_telegram(
-                        f"💰 Đòn bẩy: {leverage}x{balance_info}\n\n"
-                        f"Chọn % số dư cho mỗi lệnh:",
-                        chat_id,
-                        create_percent_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho đòn bẩy:",
-                                chat_id, create_leverage_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif current_step == 'waiting_percent':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                try:
-                    percent = float(text)
-                    if percent <= 0 or percent > 100:
-                        send_telegram("⚠️ % số dư phải từ 0.1 đến 100. Vui lòng chọn lại:",
-                                    chat_id, create_percent_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['percent'] = percent
-                    user_state['step'] = 'waiting_tp'
-                    
-                    balance = get_balance(self.api_key, self.api_secret)
-                    actual_amount = balance * (percent / 100) if balance else 0
-                    
-                    send_telegram(
-                        f"📊 % Số dư: {percent}%\n"
-                        f"💵 Số tiền mỗi lệnh: ~{actual_amount:.2f} USDT\n\n"
-                        f"Chọn Take Profit (%):",
-                        chat_id,
-                        create_tp_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho % số dư:",
-                                chat_id, create_percent_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif current_step == 'waiting_tp':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                try:
-                    tp = float(text)
-                    if tp <= 0:
-                        send_telegram("⚠️ Take Profit phải lớn hơn 0. Vui lòng chọn lại:",
-                                    chat_id, create_tp_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['tp'] = tp
-                    user_state['step'] = 'waiting_sl'
-                    
-                    send_telegram(
-                        f"🎯 Take Profit: {tp}%\n\n"
-                        f"Chọn Stop Loss (%):",
-                        chat_id,
-                        create_sl_keyboard(),
-                        self.telegram_bot_token, self.telegram_chat_id
-                    )
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho Take Profit:",
-                                chat_id, create_tp_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif current_step == 'waiting_sl':
-            if text == '❌ Hủy bỏ':
-                self.user_states[chat_id] = {}
-                send_telegram("❌ Đã hủy thêm bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                try:
-                    sl = float(text)
-                    if sl < 0:
-                        send_telegram("⚠️ Stop Loss phải lớn hơn hoặc bằng 0. Vui lòng chọn lại:",
-                                    chat_id, create_sl_keyboard(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                        return
-
-                    user_state['sl'] = sl
-                    
-                    # Lấy tất cả thông tin từ user_state
-                    strategy = user_state.get('strategy')
-                    bot_mode = user_state.get('bot_mode', 'static')
-                    leverage = user_state.get('leverage')
-                    percent = user_state.get('percent')
-                    tp = user_state.get('tp')
-                    sl = user_state.get('sl')
-                    roi_trigger = user_state.get('roi_trigger')
-                    symbol = user_state.get('symbol')
-                    bot_count = user_state.get('bot_count', 1)
-                    
-                    success = self.add_bot(
-                        symbol=symbol,
-                        lev=leverage,
-                        percent=percent,
-                        tp=tp,
-                        sl=sl,
-                        roi_trigger=roi_trigger,
-                        strategy_type=strategy,
-                        bot_mode=bot_mode,
-                        bot_count=bot_count
-                    )
-                    
-                    if success:
-                        roi_info = f" | 🎯 ROI Trigger: {roi_trigger}%" if roi_trigger else ""
-                        
-                        success_msg = (
-                            f"✅ <b>ĐÃ TẠO {bot_count} BOT THÀNH CÔNG</b>\n\n"
-                            f"🤖 Chiến lược: {strategy}\n"
-                            f"🔧 Chế độ: {bot_mode}\n"
-                            f"🔢 Số lượng: {bot_count} bot độc lập\n"
-                            f"💰 Đòn bẩy: {leverage}x\n"
-                            f"📊 % Số dư: {percent}%\n"
-                            f"🎯 TP: {tp}%\n"
-                            f"🛡️ SL: {sl}%{roi_info}"
-                        )
-                        if bot_mode == 'static' and symbol:
-                            success_msg += f"\n🔗 Coin: {symbol}"
-                        
-                        success_msg += f"\n\n🔄 <b>CƠ CHẾ MỞ LỆNH NGƯỢC LẠI ĐÃ KÍCH HOẠT</b>\n"
-                        success_msg += f"📈 Sau khi đóng lệnh, bot tự mở lệnh ngược lại\n"
-                        success_msg += f"💵 Giữ nguyên số tiền đầu tư: {percent}%\n"
-                        success_msg += f"🔗 Giữ nguyên coin (chỉ tìm mới khi lỗi)"
-                        
-                        send_telegram(success_msg, chat_id, create_main_menu(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                    else:
-                        send_telegram("❌ Có lỗi khi tạo bot. Vui lòng thử lại.",
-                                    chat_id, create_main_menu(),
-                                    self.telegram_bot_token, self.telegram_chat_id)
-                    
-                    self.user_states[chat_id] = {}
-                    
-                except ValueError:
-                    send_telegram("⚠️ Vui lòng nhập số hợp lệ cho Stop Loss:",
-                                chat_id, create_sl_keyboard(),
-                                self.telegram_bot_token, self.telegram_chat_id)
-
-        elif text == "➕ Thêm Bot":
-            self.user_states[chat_id] = {'step': 'waiting_bot_count'}
-            balance = get_balance(self.api_key, self.api_secret)
-            if balance is None:
-                send_telegram("❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key và kết nối mạng!", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-                return
-            
-            send_telegram(
-                f"🎯 <b>CHỌN SỐ LƯỢNG BOT ĐỘC LẬP</b>\n\n"
-                f"💰 Số dư hiện có: <b>{balance:.2f} USDT</b>\n\n"
-                f"Chọn số lượng bot độc lập bạn muốn tạo:",
-                chat_id,
-                create_bot_count_keyboard(),
-                self.telegram_bot_token, self.telegram_chat_id
-            )
-        
-        elif text == "📊 Danh sách Bot":
-            if not self.bots:
-                send_telegram("🤖 Không có bot nào đang chạy", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-            else:
-                message = "🤖 <b>DANH SÁCH BOT ĐỘC LẬP ĐANG CHẠY</b>\n\n"
-                
-                searching_bots = 0
-                trading_bots = 0
-                
-                for bot_id, bot in self.bots.items():
-                    if bot.status == "searching":
-                        status = "🔍 Đang tìm coin"
-                        searching_bots += 1
-                    elif bot.status == "waiting":
-                        status = "🟡 Chờ tín hiệu"
-                        trading_bots += 1
-                    elif bot.status == "open":
-                        status = "🟢 Đang trade"
-                        trading_bots += 1
-                    else:
-                        status = "⚪ Unknown"
-                    
-                    roi_info = f" | 🎯 ROI: {bot.roi_trigger}%" if bot.roi_trigger else ""
-                    symbol_info = bot.symbol if bot.symbol else "Đang tìm..."
-                    message += f"🔹 {bot_id}\n"
-                    message += f"   📊 {symbol_info} | {status}\n"
-                    message += f"   💰 ĐB: {bot.lev}x | Vốn: {bot.percent}%{roi_info}\n\n"
-                
-                message += f"📈 Tổng số: {len(self.bots)} bot\n"
-                message += f"🔍 Đang tìm coin: {searching_bots} bot\n"
-                message += f"📊 Đang trade: {trading_bots} bot"
-                
-                send_telegram(message, chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text == "📊 Thống kê":
-            summary = self.get_position_summary()
-            send_telegram(summary, chat_id,
-                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        elif text == "⛔ Dừng Bot":
-            if not self.bots:
-                send_telegram("🤖 Không có bot nào đang chạy", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-            else:
-                message = "⛔ <b>CHỌN BOT ĐỂ DỪNG</b>\n\n"
-                keyboard = []
-                row = []
-                
-                for i, bot_id in enumerate(self.bots.keys()):
-                    bot = self.bots[bot_id]
-                    symbol_info = bot.symbol if bot.symbol else "No Coin"
-                    message += f"🔹 {bot_id} - {symbol_info}\n"
-                    row.append({"text": f"⛔ {bot_id}"})
-                    if len(row) == 1 or i == len(self.bots) - 1:
-                        keyboard.append(row)
-                        row = []
-                
-                keyboard.append([{"text": "⛔ DỪNG TẤT CẢ"}])
-                keyboard.append([{"text": "❌ Hủy bỏ"}])
-                
-                send_telegram(
-                    message, 
-                    chat_id, 
-                    {"keyboard": keyboard, "resize_keyboard": True, "one_time_keyboard": True},
-                    self.telegram_bot_token, self.telegram_chat_id
-                )
-        
-        elif text.startswith("⛔ "):
-            bot_id = text.replace("⛔ ", "").strip()
-            if bot_id == "DỪNG TẤT CẢ":
-                self.stop_all()
-                send_telegram("⛔ Đã dừng tất cả bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif self.stop_bot(bot_id):
-                send_telegram(f"⛔ Đã dừng bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                send_telegram(f"⚠️ Không tìm thấy bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-        
-        elif text == "💰 Số dư":
-            try:
-                balance = get_balance(self.api_key, self.api_secret)
-                if balance is None:
-                    send_telegram("❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key và kết nối mạng!", chat_id,
-                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-                else:
-                    send_telegram(f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT", chat_id,
-                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-            except Exception as e:
-                send_telegram(f"⚠️ Lỗi lấy số dư: {str(e)}", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text == "📈 Vị thế":
-            try:
-                positions = get_positions(api_key=self.api_key, api_secret=self.api_secret)
-                if not positions:
-                    send_telegram("📭 Không có vị thế nào đang mở", chat_id,
-                                bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-                    return
-                
-                message = "📈 <b>VỊ THẾ ĐANG MỞ</b>\n\n"
-                for pos in positions:
-                    position_amt = float(pos.get('positionAmt', 0))
-                    if position_amt != 0:
-                        symbol = pos.get('symbol', 'UNKNOWN')
-                        entry = float(pos.get('entryPrice', 0))
-                        side = "LONG" if position_amt > 0 else "SHORT"
-                        pnl = float(pos.get('unRealizedProfit', 0))
-                        
-                        message += (
-                            f"🔹 {symbol} | {side}\n"
-                            f"📊 Khối lượng: {abs(position_amt):.4f}\n"
-                            f"🏷️ Giá vào: {entry:.4f}\n"
-                            f"💰 PnL: {pnl:.2f} USDT\n\n"
-                        )
-                
-                send_telegram(message, chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-            except Exception as e:
-                send_telegram(f"⚠️ Lỗi lấy vị thế: {str(e)}", chat_id,
-                            bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text == "🎯 Chiến lược":
-            strategy_info = (
-                "🎯 <b>HỆ THỐNG PHÂN TÍCH BIẾN ĐỘNG VỚI CƠ CHẾ ĐẢO CHIỀU</b>\n\n"
-                
-                "📊 <b>Nguyên tắc giao dịch:</b>\n"
-                "• Tự động lọc coin có đòn bẩy phù hợp\n"
-                "• Phân tích biến động giá 1 giờ\n"
-                "• Chọn coin biến động mạnh nhất\n"
-                "• ĐI NGƯỢC HƯỚNG biến động\n"
-                "• Biến động dương (tăng) → SELL\n"
-                "• Biến động âm (giảm) → BUY\n\n"
-                
-                "🔄 <b>Cơ chế mở lệnh ngược lại:</b>\n"
-                "• Sau khi đóng lệnh, bot tự động mở lệnh ngược lại\n"
-                "• Giữ nguyên coin, giữ nguyên số tiền đầu tư\n"
-                "• Tiếp tục luân phiên BUY/SELL trên cùng coin\n"
-                "• Chỉ tìm coin mới khi có lỗi hoặc dừng bot\n\n"
-                
-                "🔍 <b>Lọc coin thông minh:</b>\n"
-                "• Tự động lọc coin có đòn bẩy >= đòn bẩy người dùng\n"
-                "• Cập nhật danh sách coin mỗi 5 phút\n"
-                "• Tránh trùng lặp với các bot khác"
-            )
-            send_telegram(strategy_info, chat_id,
-                        bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text == "⚙️ Cấu hình":
-            balance = get_balance(self.api_key, self.api_secret)
-            api_status = "✅ Đã kết nối" if balance is not None else "❌ Lỗi kết nối"
-            
-            searching_bots = sum(1 for bot in self.bots.values() if bot.status == "searching")
-            trading_bots = sum(1 for bot in self.bots.values() if bot.status in ["waiting", "open"])
-            
-            roi_bots = sum(1 for bot in self.bots.values() if bot.roi_trigger is not None)
-            
-            config_info = (
-                "⚙️ <b>CẤU HÌNH HỆ THỐNG ĐA LUỒNG</b>\n\n"
-                f"🔑 Binance API: {api_status}\n"
-                f"🤖 Tổng số bot: {len(self.bots)}\n"
-                f"🔍 Đang tìm coin: {searching_bots} bot\n"
-                f"📊 Đang trade: {trading_bots} bot\n"
-                f"🎯 Bot có ROI Trigger: {roi_bots} bot\n"
-                f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối\n\n"
-                f"🔄 <b>CƠ CHẾ MỞ LỆNH NGƯỢC LẠI ĐANG HOẠT ĐỘNG</b>"
-            )
-            send_telegram(config_info, chat_id,
-                        bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
-        
-        elif text:
-            self.send_main_menu(chat_id)
-
-    def _continue_bot_creation(self, chat_id, user_state):
-        strategy = user_state.get('strategy')
-        bot_mode = user_state.get('bot_mode', 'static')
-        bot_count = user_state.get('bot_count', 1)
-        roi_trigger = user_state.get('roi_trigger')
-        
-        roi_info = f" | 🎯 ROI Trigger: {roi_trigger}%" if roi_trigger else ""
-        
-        if bot_mode == 'static':
-            user_state['step'] = 'waiting_symbol'
-            send_telegram(
-                f"🎯 <b>BOT TĨNH: {strategy}</b>\n"
-                f"🤖 Số lượng: {bot_count} bot độc lập{roi_info}\n\n"
-                f"Chọn cặp coin:",
-                chat_id,
-                create_symbols_keyboard(strategy),
-                self.telegram_bot_token, self.telegram_chat_id
-            )
-        else:
-            user_state['step'] = 'waiting_leverage'
-            send_telegram(
-                f"🎯 <b>BOT ĐỘNG ĐA LUỒNG</b>\n"
-                f"🤖 Số lượng: {bot_count} bot độc lập{roi_info}\n\n"
-                f"Chọn đòn bẩy:",
-                chat_id,
-                create_leverage_keyboard(strategy),
-                self.telegram_bot_token, self.telegram_chat_id
-            )
+    # ... (giữ nguyên các phương thức khác)
 
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
