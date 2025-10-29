@@ -343,73 +343,69 @@ def get_all_usdt_pairs(limit=600):
         return []
 
 def get_top_volume_symbols(limit=100):
-    """Top {limit} USDT pairs theo quoteVolume của NẾN 1M đã đóng (đa luồng)."""
+    """Top {limit} USDT pairs theo volume 24h - CHỈ 1 REQUEST"""
     try:
-        universe = get_all_usdt_pairs(limit=600) or []
-        if not universe:
-            logger.warning("❌ Không lấy được danh sách coin USDT")
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        data = binance_api_request(url)
+        if not data:
+            logger.warning("❌ Không lấy được dữ liệu 24h từ Binance")
             return []
 
-        scored, failed = [], 0
-        max_workers = 8  # Giảm workers để tránh bị chặn
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futmap = {ex.submit(_last_closed_1m_quote_volume, s): s for s in universe}
-            for fut in as_completed(futmap):
-                sym = futmap[fut]
-                try:
-                    qv = fut.result()
-                    if qv is not None:
-                        scored.append((sym, qv))
-                except Exception:
-                    failed += 1
-                time.sleep(0.5)  # Tăng thời gian chờ để tránh 429
+        # Lọc các cặp USDT và sắp xếp theo volume
+        usdt_pairs = []
+        for item in data:
+            symbol = item.get('symbol', '')
+            if symbol.endswith('USDT'):
+                quote_volume = float(item.get('quoteVolume', 0))
+                usdt_pairs.append((symbol, quote_volume))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
-        top_syms = [s for s, _ in scored[:limit]]
-        logger.info(f"✅ Top {len(top_syms)} theo 1m quoteVolume (phân tích: {len(scored)}, lỗi: {failed})")
-        return top_syms
+        # Sắp xếp theo volume giảm dần
+        usdt_pairs.sort(key=lambda x: x[1], reverse=True)
+        top_symbols = [s for s, _ in usdt_pairs[:limit]]
+        
+        if top_symbols:
+            top_volume_info = [f"{s}({v:,.0f})" for s, v in usdt_pairs[:3]]
+            logger.info(f"✅ Top {len(top_symbols)} coin volume 24h: {top_volume_info}...")
+        else:
+            logger.warning("⚠️ Không tìm thấy coin volume cao")
+            
+        return top_symbols
 
     except Exception as e:
-        logger.error(f"❌ Lỗi lấy top volume 1 phút (đa luồng): {str(e)}")
+        logger.error(f"❌ Lỗi lấy top volume 24h: {str(e)}")
         return []
 
 def get_top_volatile_symbols(limit=30):
-    """Top {limit} USDT pairs theo biến động giá 1 giờ"""
+    """Top {limit} USDT pairs theo biến động giá 24h - CHỈ 1 REQUEST"""
     try:
-        universe = get_all_usdt_pairs(limit=300)  # Giảm xuống 300 coin
-        if not universe:
-            logger.warning("❌ Không lấy được danh sách coin USDT")
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        data = binance_api_request(url)
+        if not data:
+            logger.warning("❌ Không lấy được dữ liệu 24h từ Binance")
             return []
 
-        volatile_symbols = []
-        max_workers = 5  # Giảm workers để tránh bị chặn
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            future_to_symbol = {ex.submit(_get_1h_volatility, symbol): symbol for symbol in universe[:100]}  # Chỉ xét 100 coin
-            
-            for future in as_completed(future_to_symbol):
-                symbol = future_to_symbol[future]
-                try:
-                    volatility = future.result()
-                    if volatility is not None and volatility > 0:
-                        volatile_symbols.append((symbol, volatility))
-                except Exception as e:
-                    logger.error(f"Lỗi tính biến động {symbol}: {str(e)}")
-                time.sleep(0.3)  # Thêm delay
+        # Lọc các cặp USDT và tính biến động (dùng absolute value)
+        usdt_pairs = []
+        for item in data:
+            symbol = item.get('symbol', '')
+            if symbol.endswith('USDT'):
+                price_change_percent = abs(float(item.get('priceChangePercent', 0)))
+                usdt_pairs.append((symbol, price_change_percent))
 
         # Sắp xếp theo biến động giảm dần
-        volatile_symbols.sort(key=lambda x: x[1], reverse=True)
-        top_symbols = [s for s, _ in volatile_symbols[:limit]]
+        usdt_pairs.sort(key=lambda x: x[1], reverse=True)
+        top_symbols = [s for s, _ in usdt_pairs[:limit]]
         
         if top_symbols:
-            logger.info(f"✅ Top {len(top_symbols)} coin biến động mạnh nhất 1h: {top_symbols[:5]}...")
+            top_volatility_info = [f"{s}({v:.1f}%)" for s, v in usdt_pairs[:3]]
+            logger.info(f"✅ Top {len(top_symbols)} coin biến động 24h: {top_volatility_info}...")
         else:
             logger.warning("⚠️ Không tìm thấy coin biến động mạnh")
             
         return top_symbols
 
     except Exception as e:
-        logger.error(f"❌ Lỗi lấy top biến động 1h: {str(e)}")
+        logger.error(f"❌ Lỗi lấy top biến động 24h: {str(e)}")
         return []
 
 def get_max_leverage(symbol, api_key, api_secret):
