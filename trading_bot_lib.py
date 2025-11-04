@@ -31,7 +31,7 @@ def _last_closed_1m_quote_volume(symbol):
     if not data or len(data) < 2:
         return None
     k = data[-2]               # nến 1m đã đóng gần nhất
-    return float(k[7])         # quoteVolume (USDT)
+    return float(k[7])         # quoteVolume (USDC)
 
 
 # ========== CẤU HÌNH LOGGING ==========
@@ -116,11 +116,11 @@ def create_bot_mode_keyboard():
 
 def create_symbols_keyboard(strategy=None):
     try:
-        symbols = get_all_usdt_pairs(limit=12)
+        symbols = get_all_usdc_pairs(limit=12)
         if not symbols:
-            symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+            symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC", "ADAUSDC", "DOGEUSDC", "XRPUSDC", "DOTUSDC", "LINKUSDC"]
     except:
-        symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT"]
+        symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC", "ADAUSDC", "DOGEUSDC", "XRPUSDC", "DOTUSDC", "LINKUSDC"]
     
     keyboard = []
     row = []
@@ -297,7 +297,7 @@ def binance_api_request(url, method='GET', params=None, headers=None):
     logger.error(f"Không thể thực hiện yêu cầu API sau {max_retries} lần thử")
     return None
 
-def get_all_usdt_pairs(limit=600):
+def get_all_usdc_pairs(limit=100):
     try:
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
@@ -305,25 +305,25 @@ def get_all_usdt_pairs(limit=600):
             logger.warning("Không lấy được dữ liệu từ Binance, trả về danh sách rỗng")
             return []
         
-        usdt_pairs = []
+        usdc_pairs = []
         for symbol_info in data.get('symbols', []):
             symbol = symbol_info.get('symbol', '')
-            if symbol.endswith('USDT') and symbol_info.get('status') == 'TRADING':
-                usdt_pairs.append(symbol)
+            if symbol.endswith('USDC') and symbol_info.get('status') == 'TRADING':
+                USDC_pairs.append(symbol)
         
-        logger.info(f"✅ Lấy được {len(usdt_pairs)} coin USDT từ Binance")
-        return usdt_pairs[:limit] if limit else usdt_pairs
+        logger.info(f"✅ Lấy được {len(USDC_pairs)} coin USDC từ Binance")
+        return usdc_pairs[:limit] if limit else usdc_pairs
         
     except Exception as e:
         logger.error(f"❌ Lỗi lấy danh sách coin từ Binance: {str(e)}")
         return []
 
 def get_top_volume_symbols(limit=100):
-    """Top {limit} USDT pairs theo quoteVolume của NẾN 1M đã đóng (đa luồng)."""
+    """Top {limit} USDC pairs theo quoteVolume của NẾN 1M đã đóng (đa luồng)."""
     try:
-        universe = get_all_usdt_pairs(limit=600) or []
+        universe = get_all_usdc_pairs(limit=100) or []
         if not universe:
-            logger.warning("❌ Không lấy được danh sách coin USDT")
+            logger.warning("❌ Không lấy được danh sách coin USDC")
             return []
 
         scored, failed = [], 0
@@ -430,11 +430,11 @@ def get_balance(api_key, api_secret):
             return None
             
         for asset in data['assets']:
-            if asset['asset'] == 'USDT':
+            if asset['asset'] == 'USDC':
                 available_balance = float(asset['availableBalance'])
                 total_balance = float(asset['walletBalance'])
                 
-                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDT, Tổng: {total_balance:.2f} USDT")
+                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDC, Tổng: {total_balance:.2f} USDC")
                 return available_balance
         return 0
     except Exception as e:
@@ -564,8 +564,8 @@ class SmartCoinFinder:
     def find_best_coin(self, target_direction, excluded_coins=None, required_leverage=10):
         """Tìm coin tốt nhất - TÌM COIN BIẾN ĐỘNG MẠNH VÀ ĐỦ ĐÒN BẨY"""
         try:
-            # Lấy tất cả coin USDT
-            all_symbols = get_all_usdt_pairs(limit=300)
+            # Lấy tất cả coin USDC
+            all_symbols = get_all_usdc_pairs(limit=100)
             if not all_symbols:
                 return None
             
@@ -929,7 +929,8 @@ class BaseBot:
             return random.choice(["BUY", "SELL"])
         else:
             # CÁC LẦN SAU: Luôn ngược với lệnh trước
-            return "SELL" if self.last_side == "BUY" else "BUY"
+            return random.choice(["BUY", "SELL"])
+            #return "SELL" if self.last_side == "BUY" else "BUY"
 
     def _handle_price_update(self, price):
         """Xử lý cập nhật giá realtime"""
@@ -1046,7 +1047,7 @@ class BaseBot:
                         f"📌 Hướng: {side}\n"
                         f"🏷️ Giá vào: {self.entry:.4f}\n"
                         f"📊 Khối lượng: {executed_qty:.4f}\n"
-                        f"💵 Giá trị: {executed_qty * self.entry:.2f} USDT\n"
+                        f"💵 Giá trị: {executed_qty * self.entry:.2f} USDC\n"
                         f"💰 Đòn bẩy: {self.lev}x\n"
                         f"🎯 TP: {self.tp}% | 🛡️ SL: {self.sl}%{roi_trigger_info}\n"
                         f"🔄 Cơ chế: {'Lệnh đầu' if self.is_first_trade else 'Ngược hướng trước'}"
@@ -1139,7 +1140,7 @@ class BaseBot:
                     f"📌 Lý do: {reason}\n"
                     f"🏷️ Giá ra: {current_price:.4f}\n"
                     f"📊 Khối lượng: {close_qty:.4f}\n"
-                    f"💰 PnL: {pnl:.2f} USDT\n"
+                    f"💰 PnL: {pnl:.2f} USDC\n"
                     f"📈 Số lần nhồi: {self.average_down_count}\n"
                     f"🔄 Lệnh tiếp theo: {'BUY' if self.side == 'SELL' else 'SELL'}"
                 )
@@ -1342,7 +1343,7 @@ class BotManager:
                 self.log("   - Kiểm tra kết nối internet")
                 return False
             else:
-                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")
+                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDC")
                 return True
         except Exception as e:
             self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
@@ -1422,7 +1423,7 @@ class BotManager:
             # Phần 1: Số dư
             balance = get_balance(self.api_key, self.api_secret)
             if balance is not None:
-                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDT\n\n"
+                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDC\n\n"
             else:
                 summary += f"💰 **SỐ DƯ**: ❌ Lỗi kết nối\n\n"
             
@@ -1479,7 +1480,7 @@ class BotManager:
             "• Áp dụng cho cả đóng lệnh thủ công trên Binance\n"
             "• Giữ nguyên coin, chỉ tìm mới khi có lỗi\n\n"
             "🔍 <b>Tìm coin thông minh:</b>\n"
-            "• Tự động chọn từ 300 coin USDT\n"
+            "• Tự động chọn từ 300 coin USDC\n"
             "• Kiểm tra đòn bẩy tối đa của coin\n"
             "• Tránh trùng lặp với các bot khác"
         )
@@ -1728,7 +1729,7 @@ class BotManager:
                     user_state['step'] = 'waiting_percent'
                     
                     balance = get_balance(self.api_key, self.api_secret)
-                    balance_info = f"\n💰 Số dư hiện có: {balance:.2f} USDT" if balance else ""
+                    balance_info = f"\n💰 Số dư hiện có: {balance:.2f} USDC" if balance else ""
                     
                     send_telegram(
                         f"💰 Đòn bẩy: {leverage}x{balance_info}\n\n"
@@ -1764,7 +1765,7 @@ class BotManager:
                     
                     send_telegram(
                         f"📊 % Số dư: {percent}%\n"
-                        f"💵 Số tiền mỗi lệnh: ~{actual_amount:.2f} USDT\n\n"
+                        f"💵 Số tiền mỗi lệnh: ~{actual_amount:.2f} USDC\n\n"
                         f"Chọn Take Profit (%):",
                         chat_id,
                         create_tp_keyboard(),
@@ -1869,7 +1870,7 @@ class BotManager:
             
             send_telegram(
                 f"🎯 <b>CHỌN SỐ LƯỢNG BOT ĐỘC LẬP</b>\n\n"
-                f"💰 Số dư hiện có: <b>{balance:.2f} USDT</b>\n\n"
+                f"💰 Số dư hiện có: <b>{balance:.2f} USDC</b>\n\n"
                 f"Chọn số lượng bot độc lập bạn muốn tạo:",
                 chat_id,
                 create_bot_count_keyboard(),
@@ -1947,19 +1948,6 @@ class BotManager:
                     self.telegram_bot_token, self.telegram_chat_id
                 )
         
-        elif text.startswith("⛔ "):
-            bot_id = text.replace("⛔ ", "").strip()
-            if bot_id == "DỪNG TẤT CẢ":
-                self.stop_all()
-                send_telegram("⛔ Đã dừng tất cả bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            elif self.stop_bot(bot_id):
-                send_telegram(f"⛔ Đã dừng bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                send_telegram(f"⚠️ Không tìm thấy bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-        
         elif text == "💰 Số dư":
             try:
                 balance = get_balance(self.api_key, self.api_secret)
@@ -1967,7 +1955,7 @@ class BotManager:
                     send_telegram("❌ <b>LỖI KẾT NỐI BINANCE</b>\nVui lòng kiểm tra API Key và kết nối mạng!", chat_id,
                                 bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
                 else:
-                    send_telegram(f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT", chat_id,
+                    send_telegram(f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDC", chat_id,
                                 bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
             except Exception as e:
                 send_telegram(f"⚠️ Lỗi lấy số dư: {str(e)}", chat_id,
@@ -1994,7 +1982,7 @@ class BotManager:
                             f"🔹 {symbol} | {side}\n"
                             f"📊 Khối lượng: {abs(position_amt):.4f}\n"
                             f"🏷️ Giá vào: {entry:.4f}\n"
-                            f"💰 PnL: {pnl:.2f} USDT\n\n"
+                            f"💰 PnL: {pnl:.2f} USDC\n\n"
                         )
                 
                 send_telegram(message, chat_id,
@@ -2014,7 +2002,7 @@ class BotManager:
                 "• Giữ nguyên coin, chỉ tìm mới khi có lỗi\n\n"
                 
                 "🔍 <b>Tìm coin thông minh:</b>\n"
-                "• Tự động chọn từ 300 coin USDT\n"
+                "• Tự động chọn từ 300 coin USDC\n"
                 "• Kiểm tra đòn bẩy tối đa của coin\n"
                 "• Tránh trùng lặp với các bot khác\n\n"
                 
