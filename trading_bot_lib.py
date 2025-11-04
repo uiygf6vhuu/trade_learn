@@ -309,9 +309,9 @@ def get_all_usdc_pairs(limit=100):
         for symbol_info in data.get('symbols', []):
             symbol = symbol_info.get('symbol', '')
             if symbol.endswith('USDC') and symbol_info.get('status') == 'TRADING':
-                USDC_pairs.append(symbol)
+                usdc_pairs.append(symbol)
         
-        logger.info(f"✅ Lấy được {len(USDC_pairs)} coin USDC từ Binance")
+        logger.info(f"✅ Lấy được {len(usdc_pairs)} coin USDC từ Binance")
         return usdc_pairs[:limit] if limit else usdc_pairs
         
     except Exception as e:
