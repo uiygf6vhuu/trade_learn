@@ -2208,13 +2208,6 @@ class BotManager:
                     self.telegram_bot_token, self.telegram_chat_id
                 )
         
-            elif self.stop_bot(bot_id):
-                send_telegram(f"⛔ Đã dừng bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-            else:
-                send_telegram(f"⚠️ Không tìm thấy bot {bot_id}", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
-        
         elif text == "💰 Số dư":
             try:
                 balance = get_balance(self.api_key, self.api_secret)
