@@ -1,4 +1,4 @@
-# trading_bot_lib.py - HOÀN CHỈNH VỚI CƠ CHẾ TÍNH TOÀN DIỆN LỜI/LỖ VÀ ĐẾM COIN
+# trading_bot_lib (80).py - HOÀN CHỈNH VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG
 import json
 import hmac
 import hashlib
@@ -552,7 +552,7 @@ class CoinManager:
         with self._lock:
             return list(self.active_coins)
 
-# ========== SMART COIN FINDER ĐÃ SỬA - TÌM COIN BIẾN ĐỘNG MẠNH ==========
+# ========== SMART COIN FINDER ĐÃ SỬA - TÌM COIN THEO KHỐI LƯỢNG VÀ KIỂM TRA VỊ THẾ ==========
 class SmartCoinFinder:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
@@ -562,8 +562,54 @@ class SmartCoinFinder:
         """Lấy đòn bẩy tối đa của symbol"""
         return get_max_leverage(symbol, self.api_key, self.api_secret)
     
+    def get_volume_signal(self, symbol):
+        """Phân tích tín hiệu khối lượng - khối lượng tăng -> BUY, khối lượng giảm -> SELL"""
+        try:
+            # Lấy dữ liệu kline 5 phút gần nhất
+            data = binance_api_request(
+                "https://fapi.binance.com/fapi/v1/klines",
+                params={"symbol": symbol, "interval": "5m", "limit": 10}
+            )
+            if not data or len(data) < 10:
+                return None
+            
+            # Tính toán khối lượng trung bình và xu hướng
+            volumes = [float(k[5]) for k in data]  # Khối lượng giao dịch
+            current_volume = volumes[-1]
+            prev_volume = volumes[-2]
+            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
+            
+            # Xác định tín hiệu dựa trên khối lượng
+            volume_increase = current_volume > prev_volume * 1.2  # Tăng 20%
+            volume_above_average = current_volume > avg_volume * 1.1  # Trên trung bình 10%
+            
+            if volume_increase and volume_above_average:
+                return "BUY"
+            elif current_volume < prev_volume * 0.8:  # Giảm 20%
+                return "SELL"
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Lỗi phân tích khối lượng {symbol}: {str(e)}")
+            return None
+    
+    def has_existing_position(self, symbol):
+        """Kiểm tra xem coin đã có vị thế trên Binance chưa"""
+        try:
+            positions = get_positions(symbol, self.api_key, self.api_secret)
+            if positions:
+                for pos in positions:
+                    position_amt = float(pos.get('positionAmt', 0))
+                    if abs(position_amt) > 0:
+                        return True
+            return False
+        except Exception as e:
+            logger.error(f"Lỗi kiểm tra vị thế {symbol}: {str(e)}")
+            return False
+    
     def find_best_coin(self, target_direction, excluded_coins=None, required_leverage=10):
-        """Tìm coin tốt nhất - TÌM COIN BIẾN ĐỘNG MẠNH VÀ ĐỦ ĐÒN BẨY"""
+        """Tìm coin tốt nhất - CHỈ CHỌN COIN CÓ TÍN HIỆU KHỐI LƯỢNG TRÙNG VỚI TARGET_DIRECTION"""
         try:
             # Lấy tất cả coin USDC
             all_symbols = get_all_usdc_pairs(limit=100)
@@ -572,8 +618,15 @@ class SmartCoinFinder:
             
             # Lọc coin theo đòn bẩy và loại bỏ coin đã active
             valid_symbols = []
+            
             for symbol in all_symbols:
+                # Kiểm tra coin đã bị loại trừ
                 if excluded_coins and symbol in excluded_coins:
+                    continue
+                
+                # 🔴 QUAN TRỌNG: Kiểm tra coin đã có vị thế trên Binance
+                if self.has_existing_position(symbol):
+                    logger.info(f"🔄 Bỏ qua {symbol} - đã có vị thế trên Binance")
                     continue
                 
                 # Kiểm tra đòn bẩy
@@ -581,17 +634,23 @@ class SmartCoinFinder:
                 if max_lev < required_leverage:
                     continue
                 
-                valid_symbols.append(symbol)
+                # 🔴 QUAN TRỌNG: Phân tích tín hiệu khối lượng và CHỈ CHẤP NHẬN nếu trùng với target_direction
+                volume_signal = self.get_volume_signal(symbol)
+                if volume_signal == target_direction:
+                    valid_symbols.append(symbol)
+                    logger.info(f"✅ Tìm thấy coin phù hợp: {symbol} - Tín hiệu khối lượng: {volume_signal}")
+                else:
+                    logger.info(f"🔄 Bỏ qua {symbol} - Tín hiệu khối lượng: {volume_signal} (không trùng với {target_direction})")
             
             if not valid_symbols:
-                logger.warning("❌ Không tìm thấy coin nào đáp ứng đòn bẩy")
+                logger.warning(f"❌ Không tìm thấy coin nào có tín hiệu khối lượng trùng với {target_direction}")
                 return None
             
-            # Chọn ngẫu nhiên từ các coin hợp lệ
+            # Chọn ngẫu nhiên từ danh sách hợp lệ
             selected_symbol = random.choice(valid_symbols)
             max_lev = self.get_symbol_leverage(selected_symbol)
             
-            logger.info(f"✅ Đã chọn coin: {selected_symbol} - Đòn bẩy: {max_lev}x")
+            logger.info(f"✅ Đã chọn coin: {selected_symbol} - Tín hiệu: {target_direction} - Đòn bẩy: {max_lev}x")
             return selected_symbol
             
         except Exception as e:
@@ -681,7 +740,7 @@ class WebSocketManager:
         for symbol in list(self.connections.keys()):
             self.remove_symbol(symbol)
 
-# ========== BASE BOT VỚI CƠ CHẾ TÍNH TOÀN DIỆN LỜI/LỖ VÀ ĐẾM COIN ==========
+# ========== BASE BOT VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -754,9 +813,15 @@ class BaseBot:
         self.find_new_bot_after_close = True
         self.bot_creation_time = time.time()
 
-        self.check_position_status()
-        if self.symbol:
-            self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
+        # KIỂM TRA NGAY KHI KHỞI TẠO: Nếu symbol đã có vị thế trên Binance, bỏ qua và tìm mới
+        if symbol and self.coin_finder.has_existing_position(symbol):
+            self.log(f"🔄 Symbol {symbol} đã có vị thế trên Binance, chuyển sang chế độ tìm coin mới...")
+            self.symbol = None
+            self.status = "searching"
+        else:
+            self.check_position_status()
+            if self.symbol:
+                self.ws_manager.add_symbol(self.symbol, self._handle_price_update)
 
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -858,36 +923,24 @@ class BaseBot:
                 self.last_error_log_time = time.time()
     
     def get_next_side_based_on_comprehensive_analysis(self):
-        """Xác định hướng lệnh tiếp theo dựa trên phân tích toàn diện: tổng giá trị và PnL"""
+        """Xác định hướng lệnh tiếp theo dựa trên PHÂN TÍCH PnL TOÀN TÀI KHOẢN"""
+        
         # Cập nhật thống kê toàn tài khoản
         self.check_global_positions()
         
-        # QUY TẮC MỚI: Ưu tiên tổng giá trị vị thế trước, sau đó đến PnL, cuối cùng là số lượng
+        # 🔴 QUY TẮC MỚI: CHỈ DỰA TRÊN PnL - không dựa trên số lượng hay giá trị
+        # PnL LONG âm nhiều -> Ưu tiên BUY để giảm lỗ
+        # PnL SHORT âm nhiều -> Ưu tiên SELL để giảm lỗ
         
-        # 1. Điểm số dựa trên TỔNG GIÁ TRỊ vị thế
-        long_score = 0
-        short_score = 0
+        long_pnl = self.global_long_pnl
+        short_pnl = self.global_short_pnl
         
-        if self.global_long_pnl > self.global_short_pnl:
-            # LONG đang có PnL thấp hơn SHORT -> ưu tiên SEll để cân bằng
-            long_score += 2
-        elif self.global_short_pnl > self.global_long_pnl:
-            # SHORT đang có PnL thấp hơn LONG -> ưu tiên SELL để cân bằng
-            short_score += 2
-        
-        # 3. Điểm số dựa trên số lượng vị thế (nếu vẫn không quyết định được)
-        if long_score == short_score:
-            if self.global_long_count > self.global_short_count:
-                # Nhiều LONG hơn -> ưu tiên SELL để cân bằng
-                short_score += 1
-            elif self.global_short_count > self.global_long_count:
-                # Nhiều SHORT hơn -> ưu tiên BUY để cân bằng
-                long_score += 1
-        
-        # 4. Quyết định dựa trên điểm số
-        if long_score > short_score:
+        # Ưu tiên vào lệnh ngược với hướng đang lỗ nhiều
+        if long_pnl > short_pnl:
+            # LONG đang lỗ nhiều hơn SHORT -> Ưu tiên BUY để giảm lỗ LONG
             return "BUY"
-        elif short_score > long_score:
+        elif short_pnl > long_pnl:
+            # SHORT đang lỗ nhiều hơn LONG -> Ưu tiên SELL để giảm lỗ SHORT
             return "SELL"
         else:
             # Bằng nhau -> Chọn ngẫu nhiên
@@ -912,14 +965,20 @@ class BaseBot:
         self.roi_check_activated = False
 
     def find_and_set_coin(self):
-        """Tìm và thiết lập coin mới cho bot"""
+        """Tìm và thiết lập coin mới cho bot - CHỈ VÀO LỆNH KHI TÍN HIỆU KHỐI LƯỢNG TRÙNG VỚI PHÂN TÍCH PnL"""
         try:
             # Lấy danh sách coin đang active để tránh trùng lặp
             active_coins = self.coin_manager.get_active_coins()
             
-            # Tìm coin phù hợp
+            # Xác định hướng lệnh dự kiến dựa trên phân tích PnL
+            target_direction = self.get_next_side_based_on_comprehensive_analysis()
+            
+            self.log(f"📊 Phân tích PnL - Hướng lệnh dự kiến: {target_direction}")
+            self.log(f"📊 Thống kê PnL - LONG: {self.global_long_pnl:.2f} USDC | SHORT: {self.global_short_pnl:.2f} USDC")
+            
+            # Tìm coin phù hợp - CHỈ CHẤP NHẬN coin có tín hiệu khối lượng TRÙNG với target_direction
             new_symbol = self.coin_finder.find_best_coin(
-                target_direction="BUY",  # Không quan trọng vì sẽ đi theo phân tích toàn diện
+                target_direction=target_direction,
                 excluded_coins=active_coins,
                 required_leverage=self.lev
             )
@@ -937,10 +996,12 @@ class BaseBot:
                 self.ws_manager.add_symbol(new_symbol, self._handle_price_update)
                 self.status = "waiting"
                 
-                self.log(f"🎯 Đã tìm thấy coin mới: {new_symbol}")
+                self.log(f"🎯 Đã tìm thấy coin phù hợp: {new_symbol}")
+                self.log(f"✅ Tín hiệu khối lượng TRÙNG với phân tích PnL - Sẵn sàng vào lệnh {target_direction}")
                 return True
-            
-            return False
+            else:
+                self.log(f"🔄 Không tìm thấy coin có tín hiệu khối lượng trùng với {target_direction} - Tiếp tục tìm kiếm...")
+                return False
             
         except Exception as e:
             self.log(f"❌ Lỗi tìm coin: {str(e)}")
@@ -997,20 +1058,31 @@ class BaseBot:
                     # QUAN TRỌNG: Nếu không có symbol, tìm coin mới NGAY
                     if not self.symbol:
                         if self.find_and_set_coin():
-                            self.log("✅ Đã tìm thấy coin mới, chờ tín hiệu...")
-                        time.sleep(1)
+                            # Đã tìm thấy coin phù hợp, chờ vào lệnh
+                            pass
+                        else:
+                            # Không tìm thấy coin phù hợp, chờ tìm lại
+                            time.sleep(5)  # Chờ lâu hơn để tránh spam
                         continue
                     
-                    # CƠ CHẾ MỚI: VÀO LỆNH DỰA TRÊN PHÂN TÍCH TOÀN DIỆN
-                    target_side = self.get_next_side_based_on_comprehensive_analysis()
-                    
-                    if target_side:
-                        if current_time - self.last_trade_time > 60 and current_time - self.last_close_time > self.cooldown_period:
+                    # Đã có symbol, kiểm tra điều kiện vào lệnh
+                    if current_time - self.last_trade_time > 60 and current_time - self.last_close_time > self.cooldown_period:
+                        # 🔴 LẤY LẠI TÍN HIỆU PnL ĐỂ XÁC NHẬN
+                        target_side = self.get_next_side_based_on_comprehensive_analysis()
+                        
+                        # 🔴 KIỂM TRA TÍN HIỆU KHỐI LƯỢNG HIỆN TẠI
+                        current_volume_signal = self.coin_finder.get_volume_signal(self.symbol)
+                        
+                        if current_volume_signal == target_side:
+                            self.log(f"✅ Tín hiệu khớp - PnL: {target_side}, Khối lượng: {current_volume_signal} - Vào lệnh {target_side}")
                             if self.open_position(target_side):
                                 self.last_trade_time = current_time
                             else:
                                 time.sleep(1)
                         else:
+                            self.log(f"🔄 Tín hiệu không khớp - PnL: {target_side}, Khối lượng: {current_volume_signal} - Chờ tín hiệu mới")
+                            # Tín hiệu không khớp, tìm coin mới
+                            self._cleanup_symbol()
                             time.sleep(1)
                     else:
                         time.sleep(1)
@@ -1057,6 +1129,13 @@ class BaseBot:
         if side not in ["BUY", "SELL"]:
             self.log(f"❌ Side không hợp lệ: {side}")
             return False
+
+        # 🔴 KIỂM TRA CUỐI CÙNG: Đảm bảo tín hiệu khối lượng vẫn trùng với side
+        if self.symbol:
+            current_volume_signal = self.coin_finder.get_volume_signal(self.symbol)
+            if current_volume_signal != side:
+                self.log(f"🔄 Tín hiệu khối lượng thay đổi: {current_volume_signal} (không trùng với {side}) - Bỏ qua lệnh")
+                return False
 
         # ✅ lock theo symbol để tránh race
         if self.symbol_locks and self.symbol:
@@ -1175,12 +1254,14 @@ class BaseBot:
 
     
     def _cleanup_symbol(self):
-        """Dọn dẹp symbol hiện tại và chuyển về trạng thái tìm kiếm"""
+        """Dọn dẹp symbol hiện tại và chuyển về trạng thái tìm kiếm - ĐÁNH DẤU COIN ĐÃ DÙNG"""
         if self.symbol:
             try:
                 self.ws_manager.remove_symbol(self.symbol)
                 self.coin_manager.unregister_coin(self.symbol)
-                self.log(f"🧹 Đã dọn dẹp symbol {self.symbol}")
+                
+                # 🔴 THÊM: Đánh dấu coin này đã được sử dụng (có thể thêm vào danh sách excluded)
+                self.log(f"🧹 Đã dọn dẹp và đánh dấu symbol {self.symbol}")
             except Exception as e:
                 self.log(f"⚠️ Lỗi khi dọn dẹp symbol: {str(e)}")
             
@@ -1197,7 +1278,7 @@ class BaseBot:
         self.high_water_mark_roi = 0
         self.roi_check_activated = False
         
-        self.log("🔄 Đã reset bot, sẵn sàng tìm coin mới")
+        self.log("🔄 Đã reset bot, sẵn sàng tìm coin mới với phân tích khối lượng")
 
     def close_position(self, reason=""):
         try:
@@ -1423,14 +1504,15 @@ class BaseBot:
                          bot_token=self.telegram_bot_token, 
                          default_chat_id=self.telegram_chat_id)
 
-# ========== BOT GLOBAL MARKET VỚI CƠ CHẾ PHÂN TÍCH TOÀN DIỆN ==========
+# ========== BOT GLOBAL MARKET VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ==========
 class GlobalMarketBot(BaseBot):
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
                  api_key, api_secret, telegram_bot_token, telegram_chat_id, bot_id=None, **kwargs):
         super().__init__(symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
                          api_key, api_secret, telegram_bot_token, telegram_chat_id,
-                         "Global-Market-Toàn-Diện", bot_id=bot_id, **kwargs)
-# ========== BOT MANAGER HOÀN CHỈNH VỚI CƠ CHẾ PHÂN TÍCH TOÀN DIỆN ==========
+                         "Global-Market-PnL-Khối-Lượng", bot_id=bot_id, **kwargs)
+
+# ========== BOT MANAGER HOÀN CHỈNH VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
@@ -1450,7 +1532,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT VỚI CƠ CHẾ PHÂN TÍCH TOÀN DIỆN ĐÃ KHỞI ĐỘNG")
+            self.log("🟢 HỆ THỐNG BOT VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ĐÃ KHỞI ĐỘNG")
 
             self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
             self.telegram_thread.start()
@@ -1578,7 +1660,7 @@ class BotManager:
             summary += f"   📈 Đang trade: {trading_bots}\n\n"
             
             # Phần 3: Phân tích toàn diện
-            summary += f"📈 **PHÂN TÍCH TOÀN DIỆN**:\n"
+            summary += f"📈 **PHÂN TÍCH PnL VÀ KHỐI LƯỢNG**:\n"
             summary += f"   📊 Số lượng: LONG={total_long_count} | SHORT={total_short_count}\n"
             summary += f"   💰 PnL: LONG={total_long_pnl:.2f} USDC | SHORT={total_short_pnl:.2f} USDC\n"
             summary += f"   ⚖️ Chênh lệch: {abs(total_long_pnl - total_short_pnl):.2f} USDC\n\n"
@@ -1596,7 +1678,7 @@ class BotManager:
                     status = status_map.get(bot['status'], bot['status'])
                     
                     roi_info = f" | 🎯 ROI: {bot['roi_trigger']}%" if bot['roi_trigger'] else ""
-                    trade_info = f" | Lệnh đầu" if bot['is_first_trade'] else f" | Tiếp theo dựa trên phân tích toàn diện"
+                    trade_info = f" | Lệnh đầu" if bot['is_first_trade'] else f" | Tiếp theo dựa trên phân tích PnL"
                     
                     summary += f"   🔹 {bot['bot_id'][:15]}...\n"
                     summary += f"      📊 {symbol_info} | {status}{trade_info}\n"
@@ -1626,17 +1708,19 @@ class BotManager:
     def send_main_menu(self, chat_id):
         welcome = (
             "🤖 <b>BOT GIAO DỊCH FUTURES ĐA LUỒNG</b>\n\n"
-            "🎯 <b>HỆ THỐNG VỚI CƠ CHẾ PHÂN TÍCH TOÀN DIỆN</b>\n\n"
-            "📊 <b>Phân tích toàn diện:</b>\n"
-            "• Kết hợp cả SỐ LƯỢNG vị thế và TỔNG LỢI NHUẬN (cả âm và dương)\n"
-            "• Xem xét cả số lượng LONG/SHORT và PnL của từng loại\n"
-            "• Quyết định dựa trên phân tích đa chiều\n\n"
-            "📈 <b>Quy tắc quyết định:</b>\n"
-            "• Nhiều LONG hơn -> Ưu tiên SELL\n"
-            "• Nhiều SHORT hơn -> Ưu tiên BUY\n"
-            "• PnL LONG thấp hơn -> Ưu tiên BUY\n"
-            "• PnL SHORT thấp hơn -> Ưu tiên SELL\n"
-            "• Bằng nhau -> Chọn ngẫu nhiên\n\n"
+            "🎯 <b>HỆ THỐNG VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG</b>\n\n"
+            "📊 <b>Phân tích PnL toàn tài khoản:</b>\n"
+            "• PnL LONG âm nhiều -> Ưu tiên BUY để giảm lỗ\n"
+            "• PnL SHORT âm nhiều -> Ưu tiên SELL để giảm lỗ\n"
+            "• Chỉ dựa trên PnL thực tế (không dựa trên số lượng)\n\n"
+            "📈 <b>Phân tích khối lượng coin:</b>\n"
+            "• Khối lượng tăng 20% -> Tín hiệu BUY\n"
+            "• Khối lượng giảm 20% -> Tín hiệu SELL\n"
+            "• So sánh với khối lượng trung bình 10 nến\n\n"
+            "✅ <b>Điều kiện vào lệnh:</b>\n"
+            "• Tín hiệu PnL PHẢI TRÙNG với tín hiệu khối lượng\n"
+            "• Tự động bỏ qua coin đã có vị thế trên Binance\n"
+            "• Kiểm tra đòn bẩy và số dư trước khi vào lệnh\n\n"
             "📈 <b>Nhồi lệnh Fibonacci theo ROI:</b>\n"
             "• Khi ROI ÂM đạt các mốc Fibonacci (200%, 300%, 500%, ...)\n"
             "• Tự động nhồi lệnh để giảm giá trung bình\n"
@@ -1721,8 +1805,8 @@ class BotManager:
             roi_info = f" | 🎯 ROI Trigger: {roi_trigger}%" if roi_trigger else " | 🎯 ROI Trigger: Tắt"
             
             success_msg = (
-                f"✅ <b>ĐÃ TẠO {created_count}/{bot_count} BOT PHÂN TÍCH TOÀN DIỆN</b>\n\n"
-                f"🎯 Hệ thống: Phân tích toàn diện (số lượng + PnL)\n"
+                f"✅ <b>ĐÃ TẠO {created_count}/{bot_count} BOT PHÂN TÍCH PnL VÀ KHỐI LƯỢNG</b>\n\n"
+                f"🎯 Hệ thống: Phân tích PnL và khối lượng\n"
                 f"💰 Đòn bẩy: {lev}x\n"
                 f"📈 % Số dư: {percent}%\n"
                 f"🎯 TP: {tp}%\n"
@@ -1735,10 +1819,11 @@ class BotManager:
             else:
                 success_msg += f"🔗 Coin: Tự động tìm kiếm\n"
             
-            success_msg += f"\n📊 <b>CƠ CHẾ PHÂN TÍCH TOÀN DIỆN ĐÃ KÍCH HOẠT</b>\n"
-            success_msg += f"📈 Xem xét cả số lượng và PnL (cả âm và dương)\n"
-            success_msg += f"⚖️ Quyết định dựa trên phân tích đa chiều\n"
-            success_msg += f"🔄 Kết hợp: Số lượng + Lợi nhuận = Quyết định tối ưu\n\n"
+            success_msg += f"\n📊 <b>CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ĐÃ KÍCH HOẠT</b>\n"
+            success_msg += f"📈 PnL LONG âm nhiều -> Ưu tiên BUY\n"
+            success_msg += f"📉 PnL SHORT âm nhiều -> Ưu tiên SELL\n"
+            success_msg += f"🔍 Chỉ vào lệnh khi tín hiệu khối lượng TRÙNG với phân tích PnL\n"
+            success_msg += f"🔄 Tự động bỏ qua coin đã có vị thế trên Binance\n\n"
             success_msg += f"📈 <b>NHỒI LỆNH FIBONACCI THEO ROI</b>\n"
             success_msg += f"🔢 Các mốc: 200%, 300%, 500%, 800%, 1300%, 2100%, 3400%\n"
             success_msg += f"⏰ Kiểm tra 10 giây/lần"
@@ -2123,12 +2208,6 @@ class BotManager:
                     self.telegram_bot_token, self.telegram_chat_id
                 )
         
-        elif text.startswith("⛔ "):
-            bot_id = text.replace("⛔ ", "").strip()
-            if bot_id == "DỪNG TẤT CẢ":
-                self.stop_all()
-                send_telegram("⛔ Đã dừng tất cả bot", chat_id, create_main_menu(),
-                            self.telegram_bot_token, self.telegram_chat_id)
             elif self.stop_bot(bot_id):
                 send_telegram(f"⛔ Đã dừng bot {bot_id}", chat_id, create_main_menu(),
                             self.telegram_bot_token, self.telegram_chat_id)
@@ -2181,23 +2260,27 @@ class BotManager:
         
         elif text == "🎯 Chiến lược":
             strategy_info = (
-                "🎯 <b>HỆ THỐNG VỚI CƠ CHẾ LUÔN NGƯỢC HƯỚNG</b>\n\n"
+                "🎯 <b>HỆ THỐNG VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG</b>\n\n"
                 
-                "🔄 <b>Cơ chế luôn ngược hướng:</b>\n"
-                "• Lần đầu: Chọn ngẫu nhiên BUY/SELL\n"
-                "• Các lần sau: LUÔN vào lệnh ngược với lệnh trước\n"
-                "• Áp dụng cho cả đóng lệnh thủ công trên Binance\n"
-                "• Giữ nguyên coin, chỉ tìm mới khi có lỗi\n\n"
+                "📊 <b>Phân tích PnL toàn tài khoản:</b>\n"
+                "• PnL LONG âm nhiều -> Ưu tiên BUY để giảm lỗ\n"
+                "• PnL SHORT âm nhiều -> Ưu tiên SELL để giảm lỗ\n"
+                "• Chỉ dựa trên PnL thực tế (không dựa trên số lượng)\n\n"
                 
-                "🔍 <b>Tìm coin thông minh:</b>\n"
-                "• Tự động chọn từ 300 coin USDT\n"
-                "• Kiểm tra đòn bẩy tối đa của coin\n"
-                "• Tránh trùng lặp với các bot khác\n\n"
+                "📈 <b>Phân tích khối lượng coin:</b>\n"
+                "• Khối lượng tăng 20% -> Tín hiệu BUY\n"
+                "• Khối lượng giảm 20% -> Tín hiệu SELL\n"
+                "• So sánh với khối lượng trung bình 10 nến\n\n"
                 
-                "💰 <b>Quản lý rủi ro:</b>\n"
-                "• TP/SL cố định theo %\n"
-                "• Cơ chế ROI Trigger thông minh\n"
-                "• Nhồi lệnh Fibonacci khi drawdown"
+                "✅ <b>Điều kiện vào lệnh:</b>\n"
+                "• Tín hiệu PnL PHẢI TRÙNG với tín hiệu khối lượng\n"
+                "• Tự động bỏ qua coin đã có vị thế trên Binance\n"
+                "• Kiểm tra đòn bẩy và số dư trước khi vào lệnh\n\n"
+                
+                "📈 <b>Nhồi lệnh Fibonacci theo ROI:</b>\n"
+                "• Khi ROI ÂM đạt các mốc Fibonacci (200%, 300%, 500%, ...)\n"
+                "• Tự động nhồi lệnh để giảm giá trung bình\n"
+                "• Các mốc: 200%, 300%, 500%, 800%, 1300%, 2100%, 3400%"
             )
             send_telegram(strategy_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -2221,7 +2304,7 @@ class BotManager:
                 f"🎯 Bot có ROI Trigger: {roi_bots} bot\n"
                 f"🔄 Bot chờ lệnh đầu: {first_trade_bots} bot\n"
                 f"🌐 WebSocket: {len(self.ws_manager.connections)} kết nối\n\n"
-                f"🔄 <b>CƠ CHẾ LUÔN NGƯỢC HƯỚNG ĐANG HOẠT ĐỘNG</b>"
+                f"📊 <b>CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ĐANG HOẠT ĐỘNG</b>"
             )
             send_telegram(config_info, chat_id,
                         bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
@@ -2249,7 +2332,7 @@ class BotManager:
                 tp=tp,
                 sl=sl,
                 roi_trigger=roi_trigger,
-                strategy_type="Global-Market-Tổng-Lỗ",
+                strategy_type="Global-Market-PnL-Khối-Lượng",
                 bot_mode=bot_mode,
                 bot_count=bot_count
             )
@@ -2259,7 +2342,7 @@ class BotManager:
                 
                 success_msg = (
                     f"✅ <b>ĐÃ TẠO {bot_count} BOT THÀNH CÔNG</b>\n\n"
-                    f"🤖 Chiến lược: Tính tổng lỗ toàn tài khoản\n"
+                    f"🤖 Chiến lược: Phân tích PnL và khối lượng\n"
                     f"🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số lượng: {bot_count} bot độc lập\n"
                     f"💰 Đòn bẩy: {leverage}x\n"
@@ -2270,10 +2353,11 @@ class BotManager:
                 if bot_mode == 'static' and symbol:
                     success_msg += f"\n🔗 Coin: {symbol}"
                 
-                success_msg += f"\n\n📉 <b>CƠ CHẾ TÍNH TỔNG LỖ ĐÃ KÍCH HOẠT</b>\n"
-                success_msg += f"📈 Lỗ LONG nhiều -> Ưu tiên SELL\n"
-                success_msg += f"📉 Lỗ SHORT nhiều -> Ưu tiên BUY\n"
-                success_msg += f"⚖️ Bằng nhau -> Chọn ngẫu nhiên\n\n"
+                success_msg += f"\n\n📊 <b>CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG ĐÃ KÍCH HOẠT</b>\n"
+                success_msg += f"📈 PnL LONG âm nhiều -> Ưu tiên BUY\n"
+                success_msg += f"📉 PnL SHORT âm nhiều -> Ưu tiên SELL\n"
+                success_msg += f"🔍 Chỉ vào lệnh khi tín hiệu khối lượng TRÙNG với phân tích PnL\n"
+                success_msg += f"🔄 Tự động bỏ qua coin đã có vị thế trên Binance\n\n"
                 success_msg += f"📈 <b>NHỒI LỆNH FIBONACCI THEO ROI</b>\n"
                 success_msg += f"🔢 Các mốc: 200%, 300%, 500%, 800%, 1300%, 2100%, 3400%\n"
                 success_msg += f"⏰ Kiểm tra 10 giây/lần"
