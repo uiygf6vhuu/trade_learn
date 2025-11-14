@@ -1,4 +1,4 @@
-# trading_bot_lib (80).py - HOÀN CHỈNH VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG
+# trading_bot_lib (81).py - HOÀN CHỈNH VỚI CƠ CHẾ PHÂN TÍCH PnL VÀ KHỐI LƯỢNG
 import json
 import hmac
 import hashlib
@@ -563,7 +563,7 @@ class SmartCoinFinder:
         return get_max_leverage(symbol, self.api_key, self.api_secret)
     
     def get_volume_signal(self, symbol):
-        """Phân tích tín hiệu khối lượng - khối lượng tăng -> BUY, khối lượng giảm -> SELL"""
+        """Phân tích tín hiệu khối lượng - khối lượng tăng + nến xanh -> BUY, khối lượng tăng + nến đỏ -> SELL"""
         try:
             # Lấy dữ liệu kline 5 phút gần nhất
             data = binance_api_request(
@@ -573,23 +573,41 @@ class SmartCoinFinder:
             if not data or len(data) < 10:
                 return None
             
-            # Tính toán khối lượng trung bình và xu hướng
-            volumes = [float(k[5]) for k in data]  # Khối lượng giao dịch
-            current_volume = volumes[-1]
-            prev_volume = volumes[-2]
-            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
-            
-            # Xác định tín hiệu dựa trên khối lượng
-            volume_increase = current_volume > prev_volume * 1.2  # Tăng 20%
-            volume_above_average = current_volume > avg_volume * 1.1  # Trên trung bình 10%
-            
-            if volume_increase and volume_above_average:
-                return "BUY"
-            elif current_volume < prev_volume * 0.8:  # Giảm 20%
-                return "SELL"
+            # Lấy nến hiện tại (nến gần nhất đã đóng)
+            current_candle = data[-2]  # Nến đã đóng gần nhất
+            prev_candle = data[-3]     # Nến trước đó
+
+            # Giá mở cửa, giá đóng cửa, khối lượng
+            open_price = float(current_candle[1])
+            close_price = float(current_candle[4])
+            current_volume = float(current_candle[5])
+            prev_volume = float(prev_candle[5])
+
+            # Tính khối lượng trung bình 9 nến trước
+            volumes = [float(k[5]) for k in data[:-1]]  # 9 nến trước
+            avg_volume = sum(volumes) / len(volumes)
+
+            # Điều kiện khối lượng tăng: khối lượng hiện tại > khối lượng trước đó 20% và trên trung bình 10%
+            volume_increase = current_volume > prev_volume * 1.2
+            volume_above_average = current_volume > avg_volume * 1.1
+
+            # Xác định hướng nến: xanh (close > open) hoặc đỏ (close < open)
+            if close_price > open_price:
+                candle_direction = "GREEN"
+            elif close_price < open_price:
+                candle_direction = "RED"
             else:
-                return None
-                
+                candle_direction = "DOJI"
+
+            # Tín hiệu: chỉ xem xét khi khối lượng TĂNG
+            if volume_increase and volume_above_average:
+                if candle_direction == "GREEN":
+                    return "BUY"
+                elif candle_direction == "RED":
+                    return "SELL"
+            # Nếu khối lượng giảm thì bỏ qua (không trả về tín hiệu)
+            return None
+
         except Exception as e:
             logger.error(f"Lỗi phân tích khối lượng {symbol}: {str(e)}")
             return None
@@ -1714,9 +1732,9 @@ class BotManager:
             "• PnL SHORT âm nhiều -> Ưu tiên SELL để giảm lỗ\n"
             "• Chỉ dựa trên PnL thực tế (không dựa trên số lượng)\n\n"
             "📈 <b>Phân tích khối lượng coin:</b>\n"
-            "• Khối lượng tăng 20% -> Tín hiệu BUY\n"
-            "• Khối lượng giảm 20% -> Tín hiệu SELL\n"
-            "• So sánh với khối lượng trung bình 10 nến\n\n"
+            "• Khối lượng tăng 20% + nến xanh -> Tín hiệu BUY\n"
+            "• Khối lượng tăng 20% + nến đỏ -> Tín hiệu SELL\n"
+            "• Khối lượng giảm -> Bỏ qua (không có tín hiệu)\n\n"
             "✅ <b>Điều kiện vào lệnh:</b>\n"
             "• Tín hiệu PnL PHẢI TRÙNG với tín hiệu khối lượng\n"
             "• Tự động bỏ qua coin đã có vị thế trên Binance\n"
@@ -1844,12 +1862,13 @@ class BotManager:
         return False
 
     def stop_all(self):
+        """Dừng tất cả bot nhưng không dừng BotManager - vẫn có thể thêm bot mới sau này"""
         self.log("⛔ Đang dừng tất cả bot...")
         for bot_id in list(self.bots.keys()):
             self.stop_bot(bot_id)
-        self.ws_manager.stop()
-        self.running = False
-        self.log("🔴 Hệ thống đã dừng")
+        # KHÔNG dừng ws_manager để vẫn có thể thêm bot mới
+        # KHÔNG đặt self.running = False để BotManager vẫn hoạt động
+        self.log("🔴 Đã dừng tất cả bot, hệ thống vẫn hoạt động và có thể thêm bot mới")
 
     def _telegram_listener(self):
         last_update_id = 0
@@ -2261,9 +2280,9 @@ class BotManager:
                 "• Chỉ dựa trên PnL thực tế (không dựa trên số lượng)\n\n"
                 
                 "📈 <b>Phân tích khối lượng coin:</b>\n"
-                "• Khối lượng tăng 20% -> Tín hiệu BUY\n"
-                "• Khối lượng giảm 20% -> Tín hiệu SELL\n"
-                "• So sánh với khối lượng trung bình 10 nến\n\n"
+                "• Khối lượng tăng 20% + nến xanh -> Tín hiệu BUY\n"
+                "• Khối lượng tăng 20% + nến đỏ -> Tín hiệu SELL\n"
+                "• Khối lượng giảm -> Bỏ qua (không có tín hiệu)\n\n"
                 
                 "✅ <b>Điều kiện vào lệnh:</b>\n"
                 "• Tín hiệu PnL PHẢI TRÙNG với tín hiệu khối lượng\n"
