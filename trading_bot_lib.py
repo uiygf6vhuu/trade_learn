@@ -588,8 +588,8 @@ class SmartCoinFinder:
             avg_volume = sum(volumes) / len(volumes)
 
             # Điều kiện khối lượng tăng: khối lượng hiện tại > khối lượng trước đó 20% và trên trung bình 10%
-            volume_increase = current_volume > prev_volume * 1.4
-            volume_above_average = current_volume > avg_volume * 1.25
+            volume_increase = current_volume > prev_volume * 1.3
+            volume_above_average = current_volume > avg_volume * 1.15
 
             # Xác định hướng nến: xanh (close > open) hoặc đỏ (close < open)
             if close_price > open_price:
