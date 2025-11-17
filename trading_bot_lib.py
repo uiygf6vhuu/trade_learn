@@ -843,7 +843,7 @@ class BaseBot:
         self.thread.start()
 
         roi_info = f" | 🎯 ROI Trigger: {roi_trigger}%" if roi_trigger else " | 🎯 ROI Trigger: Tắt"
-        self.log(f"🟢 Bot {strategy_name} khởi động | Tối đa: {max_coins} coin | ĐB: {lev}x | Vốn: {percent}% | TP/SL: {tp}%/{sl}%{roi_info}")
+        #self.log(f"🟢 Bot {strategy_name} khởi động | Tối đa: {max_coins} coin | ĐB: {lev}x | Vốn: {percent}% | TP/SL: {tp}%/{sl}%{roi_info}")
 
     def _run(self):
         """Vòng lặp chính - XỬ LÝ NỐI TIẾP với HỆ THỐNG RSI MỚI"""
@@ -863,14 +863,14 @@ class BaseBot:
                 
                 # TÌM COIN MỚI NẾU CHƯA ĐẠT GIỚI HẠN - MỖI COIN ĐỘC LẬP
                 if len(self.active_symbols) < self.max_coins:
-                    self.log(f"🔍 Đang tìm coin mới ({len(self.active_symbols)}/{self.max_coins})...")
+                    #self.log(f"🔍 Đang tìm coin mới ({len(self.active_symbols)}/{self.max_coins})...")
                     if self._find_and_add_new_coin():
-                        self.log("✅ Đã thêm coin mới, chờ 3s trước khi xử lý tiếp...")
+                        #self.log("✅ Đã thêm coin mới, chờ 3s trước khi xử lý tiếp...")
                         self.last_trade_completion_time = current_time
                         time.sleep(3)
                         continue
                     else:
-                        self.log(f"🔍 Không tìm thấy coin phù hợp, thử lại sau")
+                        #self.log(f"🔍 Không tìm thấy coin phù hợp, thử lại sau")
                         time.sleep(5)
                         continue
                 
@@ -880,30 +880,30 @@ class BaseBot:
                     symbol_to_process = self.active_symbols[0]
                     self.current_processing_symbol = symbol_to_process
                     
-                    self.log(f"🔄 Đang xử lý coin: {symbol_to_process} (thứ tự: {self.active_symbols})")
+                    #self.log(f"🔄 Đang xử lý coin: {symbol_to_process} (thứ tự: {self.active_symbols})")
                     
                     # Xử lý coin này
                     trade_executed = self._process_single_symbol(symbol_to_process)
                     
                     # 🔴 CHỜ 3s SAU KHI XỬ LÝ XONG
                     self.last_trade_completion_time = time.time()
-                    self.log(f"⏳ Đã xử lý {symbol_to_process}, chờ 3s trước khi xử lý coin tiếp theo...")
+                    #self.log(f"⏳ Đã xử lý {symbol_to_process}, chờ 3s trước khi xử lý coin tiếp theo...")
                     time.sleep(3)
                     
                     # Xoay danh sách: chuyển coin vừa xử lý xuống cuối
                     if len(self.active_symbols) > 1:
                         self.active_symbols.append(self.active_symbols.pop(0))
-                        self.log(f"🔄 Đã xoay danh sách coin: {self.active_symbols}")
+                        #self.log(f"🔄 Đã xoay danh sách coin: {self.active_symbols}")
                     
                     self.current_processing_symbol = None
                 else:
                     # Không có coin nào, chờ và thử tìm lại
-                    self.log("🔍 Không có coin nào trong danh sách, chờ 5s và thử tìm coin mới...")
+                    #self.log("🔍 Không có coin nào trong danh sách, chờ 5s và thử tìm coin mới...")
                     time.sleep(5)
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
-                    self.log(f"❌ Lỗi hệ thống: {str(e)}")
+                    #self.log(f"❌ Lỗi hệ thống: {str(e)}")
                     self.last_error_log_time = time.time()
                 time.sleep(1)
 
@@ -920,13 +920,13 @@ class BaseBot:
             
             # 🔴 KIỂM TRA BỔ SUNG: Đảm bảo coin không có vị thế trên Binance
             if self.coin_finder.has_existing_position(symbol) and not symbol_info['position_open']:
-                self.log(f"⚠️ {symbol} - PHÁT HIỆN CÓ VỊ THẾ TRÊN BINANCE, DỪNG THEO DÕI VÀ TÌM COIN KHÁC")
+                #self.log(f"⚠️ {symbol} - PHÁT HIỆN CÓ VỊ THẾ TRÊN BINANCE, DỪNG THEO DÕI VÀ TÌM COIN KHÁC")
                 self.stop_symbol(symbol)
                 return False
             
             # Xử lý theo trạng thái
             if symbol_info['position_open']:
-                self.log(f"📊 {symbol} - Đang kiểm tra điều kiện đóng lệnh...")
+                #self.log(f"📊 {symbol} - Đang kiểm tra điều kiện đóng lệnh...")
                 
                 # 🔴 KIỂM TRA ĐÓNG LỆNH THÔNG MINH (ROI + TÍN HIỆU 40%)
                 if self._check_smart_exit_condition(symbol):
@@ -948,11 +948,11 @@ class BaseBot:
                     entry_signal = self.coin_finder.get_entry_signal(symbol)
                     
                     if entry_signal == target_side:
-                        self.log(f"✅ {symbol} - Tín hiệu vào lệnh khớp, chuẩn bị vào lệnh {target_side}")
+                        #self.log(f"✅ {symbol} - Tín hiệu vào lệnh khớp, chuẩn bị vào lệnh {target_side}")
                         
                         # 🔴 KIỂM TRA CUỐI CÙNG TRƯỚC KHI VÀO LỆNH
                         if self.coin_finder.has_existing_position(symbol):
-                            self.log(f"🚫 {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA VÀ TÌM COIN KHÁC")
+                            #self.log(f"🚫 {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA VÀ TÌM COIN KHÁC")
                             self.stop_symbol(symbol)
                             return False
                         
@@ -960,17 +960,17 @@ class BaseBot:
                             symbol_info['last_trade_time'] = current_time
                             return True
                     else:
-                        self.log(f"🔄 {symbol} - Chưa có tín hiệu: Target={target_side}, Signal={entry_signal}")
+                        #self.log(f"🔄 {symbol} - Chưa có tín hiệu: Target={target_side}, Signal={entry_signal}")
                 else:
                     wait_time = max(60 - (current_time - symbol_info['last_trade_time']), 
                                   3600 - (current_time - symbol_info['last_close_time']))
                     if wait_time > 0:
-                        self.log(f"⏳ {symbol} - Đang chờ hết thời gian chờ: {int(wait_time)}s")
+                        #self.log(f"⏳ {symbol} - Đang chờ hết thời gian chờ: {int(wait_time)}s")
             
             return False
             
         except Exception as e:
-            self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
+            #self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
             return False
 
     def _check_smart_exit_condition(self, symbol):
@@ -1021,7 +1021,7 @@ class BaseBot:
                         closes = [float(k[4]) for k in data]
                         rsi_current = self.coin_finder.calculate_rsi(closes)
                         
-                        self.log(f"🎯 {symbol} - Điều kiện đóng lệnh thỏa mãn: ROI={current_roi:.2f}%, RSI={rsi_current:.1f}, Khối lượng thay đổi={volume_change:.1f}%")
+                        #self.log(f"🎯 {symbol} - Điều kiện đóng lệnh thỏa mãn: ROI={current_roi:.2f}%, RSI={rsi_current:.1f}, Khối lượng thay đổi={volume_change:.1f}%")
                     
                     reason = f"🎯 Đạt ROI {self.roi_trigger}% + Tín hiệu đóng lệnh (ROI: {current_roi:.2f}%)"
                     self._close_symbol_position(symbol, reason)
@@ -1030,7 +1030,7 @@ class BaseBot:
             return False
             
         except Exception as e:
-            self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
+            #self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
             return False
 
     def _find_and_add_new_coin(self):
@@ -1039,7 +1039,7 @@ class BaseBot:
             active_coins = self.coin_manager.get_active_coins()
             target_direction = self.get_next_side_based_on_comprehensive_analysis()
             
-            self.log(f"🔍 Đang tìm coin mới... (đã có {len(self.active_symbols)}/{self.max_coins} coin)")
+            #self.log(f"🔍 Đang tìm coin mới... (đã có {len(self.active_symbols)}/{self.max_coins} coin)")
             
             new_symbol = self.coin_finder.find_best_coin(
                 target_direction=target_direction,
@@ -1050,28 +1050,28 @@ class BaseBot:
             if new_symbol:
                 # 🔴 KIỂM TRA BỔ SUNG: Đảm bảo coin mới không có vị thế trên Binance
                 if self.coin_finder.has_existing_position(new_symbol):
-                    self.log(f"🚫 {new_symbol} - Coin tìm thấy đã có vị thế trên Binance, bỏ qua và tìm coin khác")
+                    #self.log(f"🚫 {new_symbol} - Coin tìm thấy đã có vị thế trên Binance, bỏ qua và tìm coin khác")
                     return False
                     
                 success = self._add_symbol(new_symbol)
                 if success:
-                    self.log(f"✅ Đã thêm coin thứ {len(self.active_symbols)}: {new_symbol}")
+                    #self.log(f"✅ Đã thêm coin thứ {len(self.active_symbols)}: {new_symbol}")
                     
                     # 🔴 KIỂM TRA NGAY LẬP TỨC: Đảm bảo coin mới thêm không có vị thế
                     time.sleep(1)
                     if self.coin_finder.has_existing_position(new_symbol):
-                        self.log(f"🚫 {new_symbol} - PHÁT HIỆN CÓ VỊ THẾ SAU KHI THÊM, DỪNG THEO DÕI NGAY")
+                        #self.log(f"🚫 {new_symbol} - PHÁT HIỆN CÓ VỊ THẾ SAU KHI THÊM, DỪNG THEO DÕI NGAY")
                         self.stop_symbol(new_symbol)
                         return False
                         
                     return True
             else:
-                self.log("🔍 Không tìm thấy coin phù hợp, thử lại sau")
+                #self.log("🔍 Không tìm thấy coin phù hợp, thử lại sau")
                 
             return False
             
         except Exception as e:
-            self.log(f"❌ Lỗi tìm coin mới: {str(e)}")
+            #self.log(f"❌ Lỗi tìm coin mới: {str(e)}")
             return False
 
     def _add_symbol(self, symbol):
@@ -1080,12 +1080,12 @@ class BaseBot:
             return False
             
         if len(self.active_symbols) >= self.max_coins:
-            self.log(f"⚠️ Đã đạt giới hạn {self.max_coins} coin, không thể thêm {symbol}")
+            #self.log(f"⚠️ Đã đạt giới hạn {self.max_coins} coin, không thể thêm {symbol}")
             return False
         
         # 🔴 KIỂM TRA QUAN TRỌNG: Đảm bảo coin không có vị thế trên Binance trước khi thêm
         if self.coin_finder.has_existing_position(symbol):
-            self.log(f"🚫 {symbol} - KHÔNG THỂ THÊM: ĐÃ CÓ VỊ THẾ TRÊN BINANCE")
+            #self.log(f"🚫 {symbol} - KHÔNG THỂ THÊM: ĐÃ CÓ VỊ THẾ TRÊN BINANCE")
             return False
         
         # Khởi tạo dữ liệu cho symbol
@@ -1117,11 +1117,11 @@ class BaseBot:
         
         # 🔴 KIỂM TRA LẦN CUỐI: Nếu phát hiện có vị thế, dừng ngay
         if self.symbol_data[symbol]['position_open']:
-            self.log(f"🚫 {symbol} - PHÁT HIỆN CÓ VỊ THẾ SAU KHI THÊM, DỪNG THEO DÕI NGAY")
+            #self.log(f"🚫 {symbol} - PHÁT HIỆN CÓ VỊ THẾ SAU KHI THÊM, DỪNG THEO DÕI NGAY")
             self.stop_symbol(symbol)
             return False
         
-        self.log(f"✅ Đã thêm {symbol} vào danh sách xử lý nối tiếp")
+        #self.log(f"✅ Đã thêm {symbol} vào danh sách xử lý nối tiếp")
         return True
 
     def _handle_price_update(self, price, symbol):
@@ -1172,7 +1172,7 @@ class BaseBot:
                 self._reset_symbol_position(symbol)
                 
         except Exception as e:
-            self.log(f"❌ Lỗi kiểm tra vị thế {symbol}: {str(e)}")
+            #self.log(f"❌ Lỗi kiểm tra vị thế {symbol}: {str(e)}")
 
     def _reset_symbol_position(self, symbol):
         """Reset trạng thái vị thế cho một symbol"""
@@ -1194,38 +1194,38 @@ class BaseBot:
         try:
             # 🔴 KIỂM TRA QUAN TRỌNG: Đảm bảo coin không có vị thế trên Binance trước khi vào lệnh
             if self.coin_finder.has_existing_position(symbol):
-                self.log(f"⚠️ {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA VÀ TÌM COIN KHÁC")
+                #self.log(f"⚠️ {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA VÀ TÌM COIN KHÁC")
                 self.stop_symbol(symbol)
                 return False
 
             # Kiểm tra lại trạng thái trong bot trước khi đặt lệnh
             self._check_symbol_position(symbol)
             if self.symbol_data[symbol]['position_open']:
-                self.log(f"⚠️ {symbol} - Đã có vị thế trong bot, bỏ qua")
+                #self.log(f"⚠️ {symbol} - Đã có vị thế trong bot, bỏ qua")
                 return False
 
             # Kiểm tra đòn bẩy
             current_leverage = self.coin_finder.get_symbol_leverage(symbol)
             if current_leverage < self.lev:
-                self.log(f"❌ {symbol} - Đòn bẩy không đủ: {current_leverage}x < {self.lev}x")
+                #self.log(f"❌ {symbol} - Đòn bẩy không đủ: {current_leverage}x < {self.lev}x")
                 self.stop_symbol(symbol)
                 return False
 
             if not set_leverage(symbol, self.lev, self.api_key, self.api_secret):
-                self.log(f"❌ {symbol} - Không thể đặt đòn bẩy")
+                #self.log(f"❌ {symbol} - Không thể đặt đòn bẩy")
                 self.stop_symbol(symbol)
                 return False
 
             # Số dư
             balance = get_balance(self.api_key, self.api_secret)
             if balance is None or balance <= 0:
-                self.log(f"❌ {symbol} - Không đủ số dư")
+                #self.log(f"❌ {symbol} - Không đủ số dư")
                 return False
 
             # Giá & step size
             current_price = get_current_price(symbol)
             if current_price <= 0:
-                self.log(f"❌ {symbol} - Lỗi lấy giá")
+                #self.log(f"❌ {symbol} - Lỗi lấy giá")
                 self.stop_symbol(symbol)
                 return False
 
@@ -1239,11 +1239,11 @@ class BaseBot:
                 qty = round(qty, 8)
 
             if qty <= 0 or qty < step_size:
-                self.log(f"❌ {symbol} - Khối lượng không hợp lệ")
+                #self.log(f"❌ {symbol} - Khối lượng không hợp lệ")
                 self.stop_symbol(symbol)
                 return False
 
-            self.log(f"📊 {symbol} - Đang đặt lệnh {side} - Qty: {qty}")
+            #self.log(f"📊 {symbol} - Đang đặt lệnh {side} - Qty: {qty}")
 
             cancel_all_orders(symbol, self.api_key, self.api_secret)
             time.sleep(0.2)
@@ -1259,7 +1259,7 @@ class BaseBot:
                     self._check_symbol_position(symbol)
                     
                     if not self.symbol_data[symbol]['position_open']:
-                        self.log(f"❌ {symbol} - Lệnh đã khớp nhưng không tạo được vị thế, có thể bị hủy")
+                        #self.log(f"❌ {symbol} - Lệnh đã khớp nhưng không tạo được vị thế, có thể bị hủy")
                         self.stop_symbol(symbol)
                         return False
                     
@@ -1286,19 +1286,19 @@ class BaseBot:
                     if self.roi_trigger:
                         message += f" | 🎯 ROI Trigger: {self.roi_trigger}%"
                     
-                    self.log(message)
+                    #self.log(message)
                     return True
                 else:
-                    self.log(f"❌ {symbol} - Lệnh không khớp")
+                    #self.log(f"❌ {symbol} - Lệnh không khớp")
                     self.stop_symbol(symbol)
                     return False
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                self.log(f"❌ {symbol} - Lỗi đặt lệnh: {error_msg}")
+                #self.log(f"❌ {symbol} - Lỗi đặt lệnh: {error_msg}")
                 
                 # 🔴 KIỂM TRA: Nếu lỗi do đã có vị thế, dừng theo dõi coin này
                 if "position" in error_msg.lower() or "exist" in error_msg.lower():
-                    self.log(f"⚠️ {symbol} - Có vấn đề với vị thế, dừng theo dõi và tìm coin khác")
+                    #self.log(f"⚠️ {symbol} - Có vấn đề với vị thế, dừng theo dõi và tìm coin khác")
                     self.stop_symbol(symbol)
                 else:
                     self.stop_symbol(symbol)
@@ -1306,7 +1306,7 @@ class BaseBot:
                 return False
 
         except Exception as e:
-            self.log(f"❌ {symbol} - Lỗi mở lệnh: {str(e)}")
+            #self.log(f"❌ {symbol} - Lỗi mở lệnh: {str(e)}")
             self.stop_symbol(symbol)
             return False
 
@@ -1316,13 +1316,13 @@ class BaseBot:
             self._check_symbol_position(symbol)
             
             if not self.symbol_data[symbol]['position_open'] or abs(self.symbol_data[symbol]['qty']) <= 0:
-                self.log(f"⚠️ {symbol} - Không có vị thế để đóng: {reason}")
+                #self.log(f"⚠️ {symbol} - Không có vị thế để đóng: {reason}")
                 return True
 
             current_time = time.time()
             if (self.symbol_data[symbol]['close_attempted'] and 
                 current_time - self.symbol_data[symbol]['last_close_attempt'] < 30):
-                self.log(f"⚠️ {symbol} - Đang thử đóng lệnh lần trước, chờ...")
+                #self.log(f"⚠️ {symbol} - Đang thử đóng lệnh lần trước, chờ...")
                 return False
             
             self.symbol_data[symbol]['close_attempted'] = True
@@ -1353,7 +1353,7 @@ class BaseBot:
                     f"💰 PnL: {pnl:.2f} USDC\n"
                     f"📈 Số lần nhồi: {self.symbol_data[symbol]['average_down_count']}"
                 )
-                self.log(message)
+                #self.log(message)
                 
                 self.symbol_data[symbol]['last_close_time'] = time.time()
                 self._reset_symbol_position(symbol)
@@ -1361,12 +1361,12 @@ class BaseBot:
                 return True
             else:
                 error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                self.log(f"❌ {symbol} - Lỗi đóng lệnh: {error_msg}")
+                #self.log(f"❌ {symbol} - Lỗi đóng lệnh: {error_msg}")
                 self.symbol_data[symbol]['close_attempted'] = False
                 return False
                 
         except Exception as e:
-            self.log(f"❌ {symbol} - Lỗi đóng lệnh: {str(e)}")
+            #self.log(f"❌ {symbol} - Lỗi đóng lệnh: {str(e)}")
             self.symbol_data[symbol]['close_attempted'] = False
             return False
 
@@ -1401,7 +1401,7 @@ class BaseBot:
             self.symbol_data[symbol]['high_water_mark_roi'] >= self.roi_trigger and 
             not self.symbol_data[symbol]['roi_check_activated']):
             self.symbol_data[symbol]['roi_check_activated'] = True
-            self.log(f"🎯 {symbol} - ĐÃ ĐẠT ROI {self.roi_trigger}% - SẴN SÀNG ĐÓNG LỆNH KHI CÓ TÍN HIỆU")
+            #self.log(f"🎯 {symbol} - ĐÃ ĐẠT ROI {self.roi_trigger}% - SẴN SÀNG ĐÓNG LỆNH KHI CÓ TÍN HIỆU")
 
         # TP/SL TRUYỀN THỐNG
         if self.tp is not None and roi >= self.tp:
@@ -1454,10 +1454,10 @@ class BaseBot:
                     if self._execute_symbol_average_down(symbol):
                         self.symbol_data[symbol]['last_average_down_time'] = current_time
                         self.symbol_data[symbol]['average_down_count'] += 1
-                        self.log(f"📈 {symbol} - Đã nhồi lệnh Fibonacci ở mốc {current_fib_level}% lỗ")
+                        #self.log(f"📈 {symbol} - Đã nhồi lệnh Fibonacci ở mốc {current_fib_level}% lỗ")
                         
         except Exception as e:
-            self.log(f"❌ {symbol} - Lỗi kiểm tra nhồi lệnh: {str(e)}")
+            #self.log(f"❌ {symbol} - Lỗi kiểm tra nhồi lệnh: {str(e)}")
 
     def _execute_symbol_average_down(self, symbol):
         """Thực hiện nhồi lệnh cho một symbol cụ thể"""
@@ -1505,13 +1505,13 @@ class BaseBot:
                         f"📈 Giá trung bình mới: {new_entry:.4f}\n"
                         f"💰 Tổng khối lượng: {total_qty:.4f}"
                     )
-                    self.log(message)
+                    #self.log(message)
                     return True
                     
             return False
             
         except Exception as e:
-            self.log(f"❌ {symbol} - Lỗi nhồi lệnh: {str(e)}")
+            #self.log(f"❌ {symbol} - Lỗi nhồi lệnh: {str(e)}")
             return False
 
     def stop_symbol(self, symbol):
@@ -1519,11 +1519,11 @@ class BaseBot:
         if symbol not in self.active_symbols:
             return False
         
-        self.log(f"⛔ Đang dừng coin {symbol}...")
+        #self.log(f"⛔ Đang dừng coin {symbol}...")
         
         # Nếu đang xử lý coin này, đợi nó xong
         if self.current_processing_symbol == symbol:
-            self.log(f"⏳ Đang chờ hoàn thành xử lý {symbol} trước khi dừng...")
+            #self.log(f"⏳ Đang chờ hoàn thành xử lý {symbol} trước khi dừng...")
             timeout = time.time() + 10
             while self.current_processing_symbol == symbol and time.time() < timeout:
                 time.sleep(0.5)
@@ -1542,17 +1542,17 @@ class BaseBot:
         if symbol in self.active_symbols:
             self.active_symbols.remove(symbol)
         
-        self.log(f"✅ Đã dừng coin {symbol} | Còn lại: {len(self.active_symbols)}/{self.max_coins} coin")
+        #self.log(f"✅ Đã dừng coin {symbol} | Còn lại: {len(self.active_symbols)}/{self.max_coins} coin")
         
         # Nếu vẫn còn slot trống, có thể tìm coin mới
         if len(self.active_symbols) < self.max_coins:
-            self.log("🔄 Còn slot trống, sẽ tìm coin mới trong lượt tiếp theo")
+            #self.log("🔄 Còn slot trống, sẽ tìm coin mới trong lượt tiếp theo")
         
         return True
 
     def stop_all_symbols(self):
         """Dừng tất cả coin nhưng vẫn giữ bot chạy"""
-        self.log("⛔ Đang dừng tất cả coin...")
+        #self.log("⛔ Đang dừng tất cả coin...")
         
         symbols_to_stop = self.active_symbols.copy()
         stopped_count = 0
@@ -1562,14 +1562,14 @@ class BaseBot:
                 stopped_count += 1
                 time.sleep(1)
         
-        self.log(f"✅ Đã dừng {stopped_count} coin, bot vẫn chạy và có thể thêm coin mới")
+        #self.log(f"✅ Đã dừng {stopped_count} coin, bot vẫn chạy và có thể thêm coin mới")
         return stopped_count
 
     def stop(self):
         """Dừng toàn bộ bot (đóng tất cả vị thế)"""
         self._stop = True
         stopped_count = self.stop_all_symbols()
-        self.log(f"🔴 Bot dừng - Đã dừng {stopped_count} coin")
+        #self.log(f"🔴 Bot dừng - Đã dừng {stopped_count} coin")
 
     def check_global_positions(self):
         """Kiểm tra vị thế toàn tài khoản"""
@@ -1605,7 +1605,7 @@ class BaseBot:
             
         except Exception as e:
             if time.time() - self.last_error_log_time > 30:
-                self.log(f"❌ Lỗi kiểm tra vị thế toàn tài khoản: {str(e)}")
+                #self.log(f"❌ Lỗi kiểm tra vị thế toàn tài khoản: {str(e)}")
                 self.last_error_log_time = time.time()
 
     def get_next_side_based_on_comprehensive_analysis(self):
@@ -1660,7 +1660,7 @@ class BotManager:
 
         if api_key and api_secret:
             self._verify_api_connection()
-            self.log("🟢 HỆ THỐNG BOT RSI + KHỐI LƯỢNG ĐÃ KHỞI ĐỘNG")
+            #self.log("🟢 HỆ THỐNG BOT RSI + KHỐI LƯỢNG ĐÃ KHỞI ĐỘNG")
 
             self.telegram_thread = threading.Thread(target=self._telegram_listener, daemon=True)
             self.telegram_thread.start()
@@ -1668,23 +1668,23 @@ class BotManager:
             if self.telegram_chat_id:
                 self.send_main_menu(self.telegram_chat_id)
         else:
-            self.log("⚡ BotManager khởi động ở chế độ không config")
+            #self.log("⚡ BotManager khởi động ở chế độ không config")
 
     def _verify_api_connection(self):
         """Kiểm tra kết nối API"""
         try:
             balance = get_balance(self.api_key, self.api_secret)
             if balance is None:
-                self.log("❌ LỖI: Không thể kết nối Binance API. Kiểm tra:")
-                self.log("   - API Key và Secret có đúng không?")
-                self.log("   - Có thể bị chặn IP (lỗi 451), thử dùng VPN")
-                self.log("   - Kiểm tra kết nối internet")
+                #self.log("❌ LỖI: Không thể kết nối Binance API. Kiểm tra:")
+                #self.log("   - API Key và Secret có đúng không?")
+                #self.log("   - Có thể bị chặn IP (lỗi 451), thử dùng VPN")
+                #self.log("   - Kiểm tra kết nối internet")
                 return False
             else:
-                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDC")
+                #self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDC")
                 return True
         except Exception as e:
-            self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
+            #self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
             return False
 
     def get_position_summary(self):
@@ -1854,12 +1854,12 @@ class BotManager:
             sl = None
             
         if not self.api_key or not self.api_secret:
-            self.log("❌ Chưa thiết lập API Key trong BotManager")
+            #self.log("❌ Chưa thiết lập API Key trong BotManager")
             return False
         
         # Kiểm tra kết nối trước khi tạo bot
         if not self._verify_api_connection():
-            self.log("❌ KHÔNG THỂ KẾT NỐI BINANCE - KHÔNG THỂ TẠO BOT")
+            #self.log("❌ KHÔNG THỂ KẾT NỐI BINANCE - KHÔNG THỂ TẠO BOT")
             return False
         
         bot_mode = kwargs.get('bot_mode', 'static')
@@ -1892,7 +1892,7 @@ class BotManager:
             created_count = 1
             
         except Exception as e:
-            self.log(f"❌ Lỗi tạo bot: {str(e)}")
+            #self.log(f"❌ Lỗi tạo bot: {str(e)}")
             return False
         
         if created_count > 0:
@@ -1924,10 +1924,10 @@ class BotManager:
             success_msg += f"• Không vào lệnh trên coin đã có vị thế\n"
             success_msg += f"• Tự động chuyển sang tìm coin khác"
             
-            self.log(success_msg)
+            #self.log(success_msg)
             return True
         else:
-            self.log("❌ Không thể tạo bot")
+            #self.log("❌ Không thể tạo bot")
             return False
 
     def stop_bot_symbol(self, bot_id, symbol):
@@ -1936,7 +1936,7 @@ class BotManager:
         if bot and hasattr(bot, 'stop_symbol'):
             success = bot.stop_symbol(symbol)
             if success:
-                self.log(f"⛔ Đã dừng coin {symbol} trong bot {bot_id}")
+                #self.log(f"⛔ Đã dừng coin {symbol} trong bot {bot_id}")
             return success
         return False
 
@@ -1945,22 +1945,22 @@ class BotManager:
         bot = self.bots.get(bot_id)
         if bot and hasattr(bot, 'stop_all_symbols'):
             stopped_count = bot.stop_all_symbols()
-            self.log(f"⛔ Đã dừng {stopped_count} coin trong bot {bot_id}")
+            #self.log(f"⛔ Đã dừng {stopped_count} coin trong bot {bot_id}")
             return stopped_count
         return 0
 
     def stop_all_coins(self):
         """Dừng tất cả coin trong tất cả bot nhưng vẫn giữ bot manager chạy"""
-        self.log("⛔ Đang dừng tất cả coin trong tất cả bot...")
+        #self.log("⛔ Đang dừng tất cả coin trong tất cả bot...")
         
         total_stopped = 0
         for bot_id, bot in self.bots.items():
             if hasattr(bot, 'stop_all_symbols'):
                 stopped_count = bot.stop_all_symbols()
                 total_stopped += stopped_count
-                self.log(f"⛔ Đã dừng {stopped_count} coin trong bot {bot_id}")
+                #self.log(f"⛔ Đã dừng {stopped_count} coin trong bot {bot_id}")
         
-        self.log(f"✅ Đã dừng tổng cộng {total_stopped} coin, hệ thống vẫn chạy và có thể thêm coin mới")
+        #self.log(f"✅ Đã dừng tổng cộng {total_stopped} coin, hệ thống vẫn chạy và có thể thêm coin mới")
         return total_stopped
 
     def stop_bot(self, bot_id):
@@ -1969,16 +1969,16 @@ class BotManager:
         if bot:
             bot.stop()
             del self.bots[bot_id]
-            self.log(f"🔴 Đã dừng bot {bot_id}")
+            #self.log(f"🔴 Đã dừng bot {bot_id}")
             return True
         return False
 
     def stop_all(self):
         """Dừng tất cả bot (đóng tất cả vị thế và xóa tất cả bot)"""
-        self.log("🔴 Đang dừng tất cả bot...")
+        #self.log("🔴 Đang dừng tất cả bot...")
         for bot_id in list(self.bots.keys()):
             self.stop_bot(bot_id)
-        self.log("🔴 Đã dừng tất cả bot, hệ thống vẫn chạy và có thể thêm bot mới")
+        #self.log("🔴 Đã dừng tất cả bot, hệ thống vẫn chạy và có thể thêm bot mới")
 
     def _telegram_listener(self):
         last_update_id = 0
