@@ -1152,7 +1152,7 @@ class BaseBot:
                 executed_qty = float(result.get('executedQty', 0))
                 avg_price = float(result.get('avgPrice', current_price))
 
-                if executed_qty > 0:
+                if executed_qty >= 0:
                     # 🔴 KIỂM TRA LẦN CUỐI: Đảm bảo vị thế thực sự được mở
                     time.sleep(1)  # Chờ một chút để Binance cập nhật
                     self._check_symbol_position(symbol)
@@ -1386,7 +1386,7 @@ class BaseBot:
                 executed_qty = float(result.get('executedQty', 0))
                 avg_price = float(result.get('avgPrice', current_price))
                 
-                if executed_qty > 0:
+                if executed_qty >= 0:
                     # Cập nhật giá trung bình và khối lượng
                     total_qty = abs(self.symbol_data[symbol]['qty']) + executed_qty
                     new_entry = (abs(self.symbol_data[symbol]['qty']) * self.symbol_data[symbol]['entry'] + executed_qty * avg_price) / total_qty
