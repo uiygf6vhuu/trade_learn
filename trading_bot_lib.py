@@ -1946,8 +1946,14 @@ class BotManager:
         
         while self.running and self.telegram_bot_token:
             try:
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates?offset={last_update_id+1}&timeout=30"
-                response = requests.get(url, timeout=35)
+                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                params = {
+                    "offset": last_update_id + 1,
+                    "timeout": 30,
+                    "allowed_updates": ["message"]  # 🔴 THÊM DÒNG NÀY
+                }
+                
+                response = requests.get(url, params=params, timeout=35)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -1958,19 +1964,29 @@ class BotManager:
                             chat_id = str(message.get('chat', {}).get('id'))
                             text = message.get('text', '').strip()
                             
+                            # 🔴 KIỂM TRA CHAT_ID CÓ KHỚP KHÔNG
                             if chat_id != self.telegram_chat_id:
+                                logger.warning(f"🚫 Tin nhắn từ chat ID không khớp: {chat_id} (mong đợi: {self.telegram_chat_id})")
                                 continue
                             
                             if update_id > last_update_id:
                                 last_update_id = update_id
                             
-                            self._handle_telegram_message(chat_id, text)
-                elif response.status_code == 409:
-                    logger.error("Lỗi xung đột Telegram")
-                    time.sleep(60)
+                            # XỬ LÝ TIN NHẮN
+                            if text:
+                                self._handle_telegram_message(chat_id, text)
+                                
+                    elif data.get('error_code') == 409:
+                        # 🔴 XỬ LÝ LỖI CONFLICT - CÓ THỂ ĐANG CHẠY NHIỀU BOT CÙNG TOKEN
+                        logger.error("❌ Lỗi 409: Có thể đang chạy nhiều instance cùng bot token")
+                        time.sleep(10)
                 else:
+                    logger.error(f"Lỗi HTTP {response.status_code}: {response.text}")
                     time.sleep(10)
-                
+                    
+            except requests.exceptions.Timeout:
+                # Timeout là bình thường, tiếp tục vòng lặp
+                continue
             except Exception as e:
                 logger.error(f"Lỗi Telegram listener: {str(e)}")
                 time.sleep(10)
