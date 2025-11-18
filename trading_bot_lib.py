@@ -1643,7 +1643,6 @@ class GlobalMarketBot(BaseBot):
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
 
-# trading_bot_lib_fixed.py - PHẦN 2: BOT MANAGER VÀ HỆ THỐNG KHỞI ĐỘNG
 # ========== BOT MANAGER HOÀN CHỈNH ĐÃ SỬA LỖI TELEGRAM ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
