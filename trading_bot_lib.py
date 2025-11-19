@@ -858,7 +858,7 @@ class BaseBot:
         self.log(f"🟢 Bot {strategy_name} khởi động | Tối đa: {max_coins} coin | ĐB: {lev}x | Vốn: {percent}% | TP/SL: {tp}%/{sl}%{roi_info}")
 
     def _run(self):
-        """Vòng lặp chính - XỬ LÝ NỐI TIẾP với HỆ THỐNG RSI MỚI"""
+        """Vòng lặp chính - XỬ LÝ NỐI TIẾP với HỆ THỐNG RSI MỚI - ĐÃ SỬA LỖI"""
         while not self._stop:
             try:
                 current_time = time.time()
@@ -868,22 +868,14 @@ class BaseBot:
                     self.check_global_positions()
                     self.last_global_position_check = current_time
                 
-                # 🔴 QUAN TRỌNG: KIỂM TRA COOLDOWN TRƯỚC KHI XỬ LÝ COIN TIẾP THEO
-                if current_time - self.last_trade_completion_time < self.trade_cooldown:
-                    time.sleep(0.5)
-                    continue
-                
-                # TÌM COIN MỚI NẾU CHƯA ĐẠT GIỚI HẠN - MỖI COIN ĐỘC LẬP
+                # 🔴 QUAN TRỌNG: TÌM COIN MỚI LIÊN TỤC - KHÔNG CHỜ ĐỦ SỐ LƯỢNG
                 if len(self.active_symbols) < self.max_coins:
                     if self._find_and_add_new_coin():
                         self.last_trade_completion_time = current_time
-                        time.sleep(3)
-                        continue
-                    else:
-                        time.sleep(5)
+                        time.sleep(1)  # Chỉ chờ 1s sau khi thêm coin mới
                         continue
                 
-                # 🔴 XỬ LÝ NỐI TIẾP: Chỉ xử lý 1 coin tại 1 thời điểm
+                # 🔴 XỬ LÝ NỐI TIẾP: Xử lý coin ngay khi có coin, không chờ đủ số lượng
                 if self.active_symbols:
                     # Lấy coin đầu tiên trong danh sách để xử lý
                     symbol_to_process = self.active_symbols[0]
@@ -892,9 +884,13 @@ class BaseBot:
                     # Xử lý coin này
                     trade_executed = self._process_single_symbol(symbol_to_process)
                     
-                    # 🔴 CHỜ 3s SAU KHI XỬ LÝ XONG
-                    self.last_trade_completion_time = time.time()
-                    time.sleep(3)
+                    # 🔴 CHỈ CHỜ COOLDOWN NẾU CÓ GIAO DỊCH THỰC SỰ
+                    if trade_executed:
+                        self.last_trade_completion_time = time.time()
+                        time.sleep(3)
+                    else:
+                        # Nếu không có giao dịch, chỉ chờ 1s
+                        time.sleep(1)
                     
                     # Xoay danh sách: chuyển coin vừa xử lý xuống cuối
                     if len(self.active_symbols) > 1:
@@ -1332,16 +1328,16 @@ class BaseBot:
             return False
 
     def _check_symbol_tp_sl(self, symbol):
-        """Kiểm tra TP/SL cho một symbol cụ thể"""
+        """Kiểm tra TP/SL cho một symbol cụ thể - TRẢ VỀ True NẾU CÓ ĐÓNG LỆNH"""
         if (not self.symbol_data[symbol]['position_open'] or 
             self.symbol_data[symbol]['entry'] <= 0 or 
             self.symbol_data[symbol]['close_attempted']):
-            return
-
+            return False
+    
         current_price = get_current_price(symbol)
         if current_price <= 0:
-            return
-
+            return False
+    
         if self.symbol_data[symbol]['side'] == "BUY":
             profit = (current_price - self.symbol_data[symbol]['entry']) * abs(self.symbol_data[symbol]['qty'])
         else:
@@ -1349,41 +1345,45 @@ class BaseBot:
             
         invested = self.symbol_data[symbol]['entry'] * abs(self.symbol_data[symbol]['qty']) / self.lev
         if invested <= 0:
-            return
+            return False
             
         roi = (profit / invested) * 100
-
+    
         # CẬP NHẬT ROI CAO NHẤT
         if roi > self.symbol_data[symbol]['high_water_mark_roi']:
             self.symbol_data[symbol]['high_water_mark_roi'] = roi
-
+    
         # KIỂM TRA ĐIỀU KIỆN ROI TRIGGER
         if (self.roi_trigger is not None and 
             self.symbol_data[symbol]['high_water_mark_roi'] >= self.roi_trigger and 
             not self.symbol_data[symbol]['roi_check_activated']):
             self.symbol_data[symbol]['roi_check_activated'] = True
-
-        # TP/SL TRUYỀN THỐNG
+    
+        # TP/SL TRUYỀN THỐNG - TRẢ VỀ True NẾU CÓ ĐÓNG LỆNH
         if self.tp is not None and roi >= self.tp:
             self._close_symbol_position(symbol, f"✅ Đạt TP {self.tp}% (ROI: {roi:.2f}%)")
+            return True
         elif self.sl is not None and self.sl > 0 and roi <= -self.sl:
             self._close_symbol_position(symbol, f"❌ Đạt SL {self.sl}% (ROI: {roi:.2f}%)")
+            return True
+        
+        return False
 
     def _check_symbol_averaging_down(self, symbol):
-        """Kiểm tra nhồi lệnh cho một symbol cụ thể"""
+        """Kiểm tra nhồi lệnh cho một symbol cụ thể - TRẢ VỀ True NẾU CÓ NHỒI LỆNH"""
         if (not self.symbol_data[symbol]['position_open'] or 
             not self.symbol_data[symbol]['entry_base'] or 
             self.symbol_data[symbol]['average_down_count'] >= 7):
-            return
+            return False
             
         try:
             current_time = time.time()
             if current_time - self.symbol_data[symbol]['last_average_down_time'] < 60:
-                return
+                return False
                 
             current_price = get_current_price(symbol)
             if current_price <= 0:
-                return
+                return False
                 
             # Tính ROI ÂM hiện tại (lỗ)
             if self.symbol_data[symbol]['side'] == "BUY":
@@ -1393,13 +1393,13 @@ class BaseBot:
                 
             invested = self.symbol_data[symbol]['entry_base'] * abs(self.symbol_data[symbol]['qty']) / self.lev
             if invested <= 0:
-                return
+                return False
                 
             current_roi = (profit / invested) * 100
             
             # Chỉ xét khi ROI ÂM (đang lỗ)
             if current_roi >= 0:
-                return
+                return False
                 
             # Chuyển ROI âm thành số dương để so sánh
             roi_negative = abs(current_roi)
@@ -1415,10 +1415,12 @@ class BaseBot:
                         self.symbol_data[symbol]['last_average_down_time'] = current_time
                         self.symbol_data[symbol]['average_down_count'] += 1
                         self.log(f"📈 {symbol} - Đã nhồi lệnh Fibonacci ở mốc {current_fib_level}% lỗ")
+                        return True
                         
         except Exception as e:
             self.log(f"❌ {symbol} - Lỗi kiểm tra nhồi lệnh: {str(e)}")
-
+        
+        return False
     def _execute_symbol_average_down(self, symbol):
         """Thực hiện nhồi lệnh cho một symbol cụ thể"""
         try:
