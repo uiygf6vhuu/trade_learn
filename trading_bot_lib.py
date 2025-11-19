@@ -1601,8 +1601,6 @@ class GlobalMarketBot(BaseBot):
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
 
-# trading_bot_lib_part2.py - PHẦN 2: BOT MANAGER VÀ HỆ THỐNG ĐIỀU KHIỂN TELEGRAM
-
 # ========== BOT MANAGER HOÀN CHỈNH VỚI HỆ THỐNG RSI + KHỐI LƯỢNG ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
@@ -1901,7 +1899,7 @@ class BotManager:
         if bot and hasattr(bot, 'stop_symbol'):
             success = bot.stop_symbol(symbol)
             if success:
-                self.log(f"✅ Đã dừng coin {symbol} trong bot {bot_id}")
+                self.log(f"⛔ Đã dừng coin {symbol} trong bot {bot_id}")
             return success
         return False
 
@@ -2479,23 +2477,3 @@ class BotManager:
             send_telegram(f"❌ Lỗi tạo bot: {str(e)}", chat_id, create_main_menu(),
                         self.telegram_bot_token, self.telegram_chat_id)
             self.user_states[chat_id] = {}
-
-# ========== HÀM KHỞI ĐỘNG HỆ THỐNG ==========
-def start_trading_system(api_key, api_secret, telegram_bot_token, telegram_chat_id):
-    """Khởi động toàn bộ hệ thống giao dịch"""
-    try:
-        bot_manager = BotManager(
-            api_key=api_key,
-            api_secret=api_secret,
-            telegram_bot_token=telegram_bot_token,
-            telegram_chat_id=telegram_chat_id
-        )
-        
-        logger.info("🎯 HỆ THỐNG RSI + KHỐI LƯỢNG ĐÃ SẴN SÀNG!")
-        logger.info("📱 Sử dụng Telegram để điều khiển bot")
-        
-        return bot_manager
-        
-    except Exception as e:
-        logger.error(f"❌ Lỗi khởi động hệ thống: {str(e)}")
-        return None
