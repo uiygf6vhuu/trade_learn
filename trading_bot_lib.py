@@ -1,4 +1,4 @@
-# trading_bot_lib_complete_part1.py - HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH - PHẦN 1
+# trading_bot_lib_complete_part1_fixed.py - HỆ THỐNG RSI + KHỐI LƯỢNG ĐÃ SỬA LỖI
 import json
 import hmac
 import hashlib
@@ -37,7 +37,7 @@ def _last_closed_1m_quote_volume(symbol):
 # ========== CẤU HÌNH LOGGING ==========
 def setup_logging():
     logging.basicConfig(
-        level=logging.WARNING,  # CHỈ HIỂN THỊ WARNING VÀ ERROR
+        level=logging.INFO,  # 🔴 THAY ĐỔI: HIỂN THỊ CẢ INFO ĐỂ DEBUG
         format='%(asctime)s - %(levelname)s - %(module)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
@@ -94,7 +94,6 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
     except Exception as e:
         logger.error(f"Lỗi kết nối Telegram: {str(e)}")
         return False
-
 
 # ========== MENU TELEGRAM HOÀN CHỈNH ==========
 def create_cancel_keyboard():
@@ -602,6 +601,7 @@ class SmartCoinFinder:
                 params={"symbol": symbol, "interval": "5m", "limit": 15}
             )
             if not data or len(data) < 15:
+                logger.info(f"❌ Không đủ dữ liệu cho {symbol}")
                 return None
             
             # Lấy 2 nến gần nhất đã đóng
@@ -618,21 +618,34 @@ class SmartCoinFinder:
             # Khối lượng
             prev_volume = float(prev_candle[5])
             current_volume = float(current_candle[5])
-            volume_change = (current_volume - prev_volume) / prev_volume * 100
+            
+            # 🔴 SỬA LỖI: Tránh chia cho 0
+            if prev_volume == 0:
+                volume_change = 0
+            else:
+                volume_change = (current_volume - prev_volume) / prev_volume * 100
+
+            logger.info(f"📊 {symbol} - RSI: {rsi_prev:.2f} -> {rsi_current:.2f}, Volume: {volume_change:.2f}%")
 
             # PHÂN TÍCH TÍN HIỆU - LOGIC CHUNG
             # TH1: RSI ở vùng cực (>80 hoặc <20) và đang hồi về trung tâm
             if (rsi_prev > 80 and rsi_current < rsi_prev and volume_change < -volume_threshold):
+                logger.info(f"🎯 {symbol} - Tín hiệu SELL: RSI từ {rsi_prev:.2f} xuống {rsi_current:.2f}, volume giảm {volume_change:.2f}%")
                 return "SELL"  # Từ vùng quá mua hồi về
             elif (rsi_prev < 20 and rsi_current > rsi_prev and volume_change < -volume_threshold):
+                logger.info(f"🎯 {symbol} - Tín hiệu BUY: RSI từ {rsi_prev:.2f} lên {rsi_current:.2f}, volume giảm {volume_change:.2f}%")
                 return "BUY"   # Từ vùng quá bán hồi về
             
             # TH2: RSI trong vùng 30-70 và khối lượng tăng
             elif (30 <= rsi_current <= 70 and volume_change > volume_threshold):
                 if rsi_current > 55:
+                    logger.info(f"🎯 {symbol} - Tín hiệu BUY: RSI {rsi_current:.2f}, volume tăng {volume_change:.2f}%")
                     return "BUY"
                 elif rsi_current < 45:
+                    logger.info(f"🎯 {symbol} - Tín hiệu SELL: RSI {rsi_current:.2f}, volume tăng {volume_change:.2f}%")
                     return "SELL"
+            
+            logger.info(f"🔸 {symbol} - Không có tín hiệu: RSI {rsi_current:.2f}, volume change {volume_change:.2f}%")
             return None
             
         except Exception as e:
@@ -667,6 +680,7 @@ class SmartCoinFinder:
         try:
             all_symbols = get_all_usdc_pairs(limit=50)
             if not all_symbols:
+                logger.warning("❌ Không lấy được danh sách coin")
                 return None
             
             valid_symbols = []
@@ -684,6 +698,7 @@ class SmartCoinFinder:
                 # Kiểm tra đòn bẩy
                 max_lev = self.get_symbol_leverage(symbol)
                 if max_lev < required_leverage:
+                    logger.info(f"🚫 Bỏ qua {symbol} - đòn bẩy tối đa {max_lev} < {required_leverage}")
                     continue
                 
                 # 🔴 SỬ DỤNG TÍN HIỆU VÀO LỆNH (20% khối lượng)
@@ -930,24 +945,25 @@ class BaseBot:
                     return True
             else:
                 # 🔴 VÀO LỆNH NGAY KHI CÓ TÍN HIỆU - KHÔNG CHỜ ĐỢI
-                if (current_time - symbol_info['last_trade_time'] > 30 and  # 🔴 GIẢM THỜI GIAN CHỜ TỪ 60s xuống 30s
-                    current_time - symbol_info['last_close_time'] > 1800):  # 🔴 GIẢM THỜI GIAN CHỜ TỪ 3600s xuống 1800s
+                # 🔴 SỬA: LOẠI BỎ THỜI GIAN CHỜ QUÁ LÂU
+                target_side = self.get_next_side_based_on_comprehensive_analysis()
+                
+                # 🔴 SỬ DỤNG TÍN HIỆU VÀO LỆNH
+                entry_signal = self.coin_finder.get_entry_signal(symbol)
+                
+                if entry_signal == target_side:
+                    # 🔴 KIỂM TRA CUỐI CÙNG TRƯỚC KHI VÀO LỆNH
+                    if self.coin_finder.has_existing_position(symbol):
+                        self.log(f"🚫 {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA")
+                        self.stop_symbol(symbol)
+                        return False
                     
-                    target_side = self.get_next_side_based_on_comprehensive_analysis()
-                    
-                    # 🔴 SỬ DỤNG TÍN HIỆU VÀO LỆNH
-                    entry_signal = self.coin_finder.get_entry_signal(symbol)
-                    
-                    if entry_signal == target_side:
-                        # 🔴 KIỂM TRA CUỐI CÙNG TRƯỚC KHI VÀO LỆNH
-                        if self.coin_finder.has_existing_position(symbol):
-                            self.log(f"🚫 {symbol} - ĐÃ CÓ VỊ THẾ TRÊN BINANCE, BỎ QUA")
-                            self.stop_symbol(symbol)
-                            return False
-                        
-                        if self._open_symbol_position(symbol, target_side):
-                            symbol_info['last_trade_time'] = current_time
-                            return True
+                    self.log(f"🎯 {symbol} - Phát hiện tín hiệu phù hợp, chuẩn bị vào lệnh {target_side}")
+                    if self._open_symbol_position(symbol, target_side):
+                        symbol_info['last_trade_time'] = current_time
+                        return True
+                else:
+                    self.log(f"🔸 {symbol} - Tín hiệu {entry_signal} không trùng với hướng {target_side}")
             
             return False
             
@@ -1585,7 +1601,7 @@ class BaseBot:
         """LOG THÔNG TIN QUAN TRỌNG - ĐÃ SỬA LỖI TELEGRAM"""
         important_keywords = ['❌', '✅', '⛔', '💰', '📈', '📊', '🎯', '🛡️', '🔴', '🟢', '⚠️', '🚫']
         if any(keyword in message for keyword in important_keywords):
-            logger.warning(f"[{self.bot_id}] {message}")
+            logger.info(f"[{self.bot_id}] {message}")  # 🔴 THAY ĐỔI: DÙNG INFO ĐỂ HIỂN THỊ
             if self.telegram_bot_token and self.telegram_chat_id:
                 send_telegram(f"<b>{self.bot_id}</b>: {message}", 
                              chat_id=self.telegram_chat_id,
@@ -1602,8 +1618,6 @@ class GlobalMarketBot(BaseBot):
 
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
-# trading_bot_lib_complete_part2.py - HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH - PHẦN 2
-# ========== BOT MANAGER HOÀN CHỈNH ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
