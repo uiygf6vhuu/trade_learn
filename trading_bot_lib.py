@@ -1,4 +1,4 @@
-# trading_bot_lib_complete.py - HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH
+# trading_bot_lib_complete_part1.py - HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH - PHẦN 1
 import json
 import hmac
 import hashlib
@@ -71,7 +71,7 @@ def send_telegram(message, chat_id=None, reply_markup=None, bot_token=None, defa
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
-    # ESCAPE MESSAGE ĐỂ TRÁNH LỐI HTML
+    # ESCAPE MESSAGE ĐỂ TRÁNH LỖI HTML
     safe_message = escape_html(message)
     
     payload = {
@@ -317,7 +317,6 @@ def get_all_usdc_pairs(limit=100):
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
-            logger.warning("Không lấy được dữ liệu từ Binance, trả về danh sách rỗng")
             return []
         
         usdc_pairs = []
@@ -338,7 +337,6 @@ def get_top_volume_symbols(limit=100):
     try:
         universe = get_all_usdc_pairs(limit=100) or []
         if not universe:
-            logger.warning("❌ Không lấy được danh sách coin USDC")
             return []
 
         scored, failed = [], 0
@@ -800,7 +798,6 @@ class WebSocketManager:
             self.remove_symbol(symbol)
 
 # ========== BASE BOT VỚI HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH ==========
-# ========== BASE BOT VỚI HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -958,6 +955,47 @@ class BaseBot:
             self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
             return False
 
+    def _check_smart_exit_condition(self, symbol):
+        """KIỂM TRA ĐÓNG LỆNH THÔNG MINH - HOÀN CHỈNH"""
+        try:
+            if not self.symbol_data[symbol]['position_open']:
+                return False
+            
+            if not self.symbol_data[symbol]['roi_check_activated']:
+                return False
+            
+            current_price = get_current_price(symbol)
+            if current_price <= 0:
+                return False
+            
+            # Tính ROI hiện tại
+            if self.symbol_data[symbol]['side'] == "BUY":
+                profit = (current_price - self.symbol_data[symbol]['entry']) * abs(self.symbol_data[symbol]['qty'])
+            else:
+                profit = (self.symbol_data[symbol]['entry'] - current_price) * abs(self.symbol_data[symbol]['qty'])
+                
+            invested = self.symbol_data[symbol]['entry'] * abs(self.symbol_data[symbol]['qty']) / self.lev
+            if invested <= 0:
+                return False
+                
+            current_roi = (profit / invested) * 100
+            
+            # Kiểm tra nếu đạt ROI trigger
+            if current_roi >= self.roi_trigger:
+                # 🔴 SỬ DỤNG TÍN HIỆU ĐÓNG LỆNH
+                exit_signal = self.coin_finder.get_exit_signal(symbol)
+                
+                if exit_signal:
+                    reason = f"🎯 Đạt ROI {self.roi_trigger}% + Tín hiệu đóng lệnh (ROI: {current_roi:.2f}%)"
+                    self._close_symbol_position(symbol, reason)
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
+            return False
+
     def _find_and_add_new_coin(self):
         """TÌM VÀ THÊM COIN MỚI - THREAD-SAFE"""
         with self.symbol_management_lock:
@@ -1042,47 +1080,6 @@ class BaseBot:
                 return False
             
             return True
-
-    def _check_smart_exit_condition(self, symbol):
-        """KIỂM TRA ĐÓNG LỆNH THÔNG MINH - HOÀN CHỈNH"""
-        try:
-            if not self.symbol_data[symbol]['position_open']:
-                return False
-            
-            if not self.symbol_data[symbol]['roi_check_activated']:
-                return False
-            
-            current_price = get_current_price(symbol)
-            if current_price <= 0:
-                return False
-            
-            # Tính ROI hiện tại
-            if self.symbol_data[symbol]['side'] == "BUY":
-                profit = (current_price - self.symbol_data[symbol]['entry']) * abs(self.symbol_data[symbol]['qty'])
-            else:
-                profit = (self.symbol_data[symbol]['entry'] - current_price) * abs(self.symbol_data[symbol]['qty'])
-                
-            invested = self.symbol_data[symbol]['entry'] * abs(self.symbol_data[symbol]['qty']) / self.lev
-            if invested <= 0:
-                return False
-                
-            current_roi = (profit / invested) * 100
-            
-            # Kiểm tra nếu đạt ROI trigger
-            if current_roi >= self.roi_trigger:
-                # 🔴 SỬ DỤNG TÍN HIỆU ĐÓNG LỆNH
-                exit_signal = self.coin_finder.get_exit_signal(symbol)
-                
-                if exit_signal:
-                    reason = f"🎯 Đạt ROI {self.roi_trigger}% + Tín hiệu đóng lệnh (ROI: {current_roi:.2f}%)"
-                    self._close_symbol_position(symbol, reason)
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
-            return False
 
     def _handle_price_update(self, price, symbol):
         """XỬ LÝ CẬP NHẬT GIÁ"""
@@ -1605,7 +1602,7 @@ class GlobalMarketBot(BaseBot):
 
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
-
+# trading_bot_lib_complete_part2.py - HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH - PHẦN 2
 # ========== BOT MANAGER HOÀN CHỈNH ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
@@ -2539,3 +2536,4 @@ class BotManager:
                 create_main_menu()
             )
             self.user_states[chat_id] = {}
+
