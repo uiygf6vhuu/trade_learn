@@ -800,6 +800,7 @@ class WebSocketManager:
             self.remove_symbol(symbol)
 
 # ========== BASE BOT VỚI HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH ==========
+# ========== BASE BOT VỚI HỆ THỐNG RSI + KHỐI LƯỢNG HOÀN CHỈNH ==========
 class BaseBot:
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager, api_key, api_secret,
                  telegram_bot_token, telegram_chat_id, strategy_name, config_key=None, bot_id=None,
@@ -828,10 +829,10 @@ class BaseBot:
         self.status = "searching"
         self._stop = False
 
-        # 🔴 BIẾN QUẢN LÝ TUẦN TỰ
+        # 🔴 BIẾN QUẢN LÝ - GIẢM THỜI GIAN CHỜ ĐỢI
         self.current_processing_symbol = None
         self.last_trade_completion_time = 0
-        self.trade_cooldown = 3  # Chờ 3s sau mỗi lệnh
+        self.trade_cooldown = 1  # 🔴 GIẢM từ 3s xuống 1s để vào lệnh nhanh hơn
 
         # Quản lý thời gian
         self.last_global_position_check = 0
@@ -865,7 +866,7 @@ class BaseBot:
         self.log(f"🟢 Bot {strategy_name} khởi động | Tối đa: {max_coins} coin | ĐB: {lev}x | Vốn: {percent}% | TP/SL: {tp}%/{sl}%{roi_info}")
 
     def _run(self):
-        """VÒNG LẶP CHÍNH - XỬ LÝ NỐI TIẾP HOÀN CHỈNH"""
+        """VÒNG LẶP CHÍNH - XỬ LÝ TỪNG COIN ĐỘC LẬP"""
         while not self._stop:
             try:
                 current_time = time.time()
@@ -875,43 +876,24 @@ class BaseBot:
                     self.check_global_positions()
                     self.last_global_position_check = current_time
                 
-                # 🔴 KIỂM TRA COOLDOWN TRƯỚC KHI XỬ LÝ
-                if current_time - self.last_trade_completion_time < self.trade_cooldown:
-                    time.sleep(0.5)
-                    continue
-                
                 # 🔴 LUÔN TÌM COIN MỚI NẾU CHƯA ĐẠT GIỚI HẠN
                 if len(self.active_symbols) < self.max_coins:
                     if self._find_and_add_new_coin():
-                        self.last_trade_completion_time = current_time
-                        time.sleep(3)
+                        # 🔴 KHÔNG CHỜ ĐỢI - TIẾP TỤC XỬ LÝ NGAY
+                        time.sleep(0.5)
                         continue
                 
-                # 🔴 XỬ LÝ NỐI TIẾP: 1 COIN TẠI 1 THỜI ĐIỂM
-                if self.active_symbols:
-                    symbol_to_process = self.active_symbols[0]
-                    self.current_processing_symbol = symbol_to_process
-                    
-                    # Xử lý coin này
-                    self._process_single_symbol(symbol_to_process)
-                    
-                    # 🔴 KIỂM TRA TP/SL VÀ NHỒI LỆNH CHO TẤT CẢ COIN CÒN LẠI
-                    for symbol in self.active_symbols:
-                        if symbol != symbol_to_process:
-                            self._check_symbol_tp_sl(symbol)
-                            self._check_symbol_averaging_down(symbol)
-                    
-                    # 🔴 CHỜ 3s SAU KHI XỬ LÝ
-                    self.last_trade_completion_time = time.time()
-                    time.sleep(3)
-                    
-                    # XOAY DANH SÁCH
-                    if len(self.active_symbols) > 1:
-                        self.active_symbols.append(self.active_symbols.pop(0))
-                    
-                    self.current_processing_symbol = None
-                else:
-                    time.sleep(5)
+                # 🔴 XỬ LÝ TẤT CẢ COIN ĐANG HOẠT ĐỘNG - MỖI COIN ĐỘC LẬP
+                processed_any = False
+                for symbol in self.active_symbols[:]:  # Dùng bản copy để tránh thay đổi trong khi lặp
+                    if self._process_single_symbol_independent(symbol):
+                        processed_any = True
+                        # 🔴 CHỈ CHỜ 1s SAU KHI XỬ LÝ THÀNH CÔNG MỘT COIN
+                        time.sleep(1)
+                
+                # 🔴 NẾU KHÔNG XỬ LÝ ĐƯỢC COIN NÀO, NGHỈ NGẮN
+                if not processed_any:
+                    time.sleep(2)
                 
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
@@ -919,8 +901,8 @@ class BaseBot:
                     self.last_error_log_time = time.time()
                 time.sleep(1)
 
-    def _process_single_symbol(self, symbol):
-        """XỬ LÝ MỘT SYMBOL DUY NHẤT - HOÀN CHỈNH"""
+    def _process_single_symbol_independent(self, symbol):
+        """XỬ LÝ MỘT SYMBOL ĐỘC LẬP - VÀO LỆNH NGAY KHI CÓ TÍN HIỆU"""
         try:
             symbol_info = self.symbol_data[symbol]
             current_time = time.time()
@@ -943,14 +925,16 @@ class BaseBot:
                     return True
                 
                 # 🔴 KIỂM TRA TP/SL TRUYỀN THỐNG
-                self._check_symbol_tp_sl(symbol)
+                if self._check_symbol_tp_sl(symbol):
+                    return True
                 
                 # 🔴 KIỂM TRA NHỒI LỆNH
-                self._check_symbol_averaging_down(symbol)
+                if self._check_symbol_averaging_down(symbol):
+                    return True
             else:
-                # Tìm cơ hội vào lệnh
-                if (current_time - symbol_info['last_trade_time'] > 60 and 
-                    current_time - symbol_info['last_close_time'] > 3600):
+                # 🔴 VÀO LỆNH NGAY KHI CÓ TÍN HIỆU - KHÔNG CHỜ ĐỢI
+                if (current_time - symbol_info['last_trade_time'] > 30 and  # 🔴 GIẢM THỜI GIAN CHỜ TỪ 60s xuống 30s
+                    current_time - symbol_info['last_close_time'] > 1800):  # 🔴 GIẢM THỜI GIAN CHỜ TỪ 3600s xuống 1800s
                     
                     target_side = self.get_next_side_based_on_comprehensive_analysis()
                     
@@ -972,47 +956,6 @@ class BaseBot:
             
         except Exception as e:
             self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
-            return False
-
-    def _check_smart_exit_condition(self, symbol):
-        """KIỂM TRA ĐÓNG LỆNH THÔNG MINH - HOÀN CHỈNH"""
-        try:
-            if not self.symbol_data[symbol]['position_open']:
-                return False
-            
-            if not self.symbol_data[symbol]['roi_check_activated']:
-                return False
-            
-            current_price = get_current_price(symbol)
-            if current_price <= 0:
-                return False
-            
-            # Tính ROI hiện tại
-            if self.symbol_data[symbol]['side'] == "BUY":
-                profit = (current_price - self.symbol_data[symbol]['entry']) * abs(self.symbol_data[symbol]['qty'])
-            else:
-                profit = (self.symbol_data[symbol]['entry'] - current_price) * abs(self.symbol_data[symbol]['qty'])
-                
-            invested = self.symbol_data[symbol]['entry'] * abs(self.symbol_data[symbol]['qty']) / self.lev
-            if invested <= 0:
-                return False
-                
-            current_roi = (profit / invested) * 100
-            
-            # Kiểm tra nếu đạt ROI trigger
-            if current_roi >= self.roi_trigger:
-                # 🔴 SỬ DỤNG TÍN HIỆU ĐÓNG LỆNH
-                exit_signal = self.coin_finder.get_exit_signal(symbol)
-                
-                if exit_signal:
-                    reason = f"🎯 Đạt ROI {self.roi_trigger}% + Tín hiệu đóng lệnh (ROI: {current_roi:.2f}%)"
-                    self._close_symbol_position(symbol, reason)
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
             return False
 
     def _find_and_add_new_coin(self):
@@ -1038,6 +981,8 @@ class BaseBot:
                     success = self._add_symbol(new_symbol)
                     if success:
                         self.log(f"✅ Đã thêm coin thứ {len(self.active_symbols)}: {new_symbol}")
+                        # 🔴 XỬ LÝ COIN MỚI NGAY LẬP TỨC
+                        threading.Thread(target=self._process_new_symbol_immediately, args=(new_symbol,), daemon=True).start()
                         return True
                     
                 return False
@@ -1045,6 +990,14 @@ class BaseBot:
             except Exception as e:
                 self.log(f"❌ Lỗi tìm coin mới: {str(e)}")
                 return False
+
+    def _process_new_symbol_immediately(self, symbol):
+        """XỬ LÝ COIN MỚI NGAY SAU KHI THÊM"""
+        try:
+            time.sleep(0.5)  # Chờ ngắn để dữ liệu khởi tạo
+            self._process_single_symbol_independent(symbol)
+        except Exception as e:
+            self.log(f"❌ Lỗi xử lý coin mới {symbol}: {str(e)}")
 
     def _add_symbol(self, symbol):
         """THÊM SYMBOL - THREAD-SAFE"""
@@ -1089,6 +1042,47 @@ class BaseBot:
                 return False
             
             return True
+
+    def _check_smart_exit_condition(self, symbol):
+        """KIỂM TRA ĐÓNG LỆNH THÔNG MINH - HOÀN CHỈNH"""
+        try:
+            if not self.symbol_data[symbol]['position_open']:
+                return False
+            
+            if not self.symbol_data[symbol]['roi_check_activated']:
+                return False
+            
+            current_price = get_current_price(symbol)
+            if current_price <= 0:
+                return False
+            
+            # Tính ROI hiện tại
+            if self.symbol_data[symbol]['side'] == "BUY":
+                profit = (current_price - self.symbol_data[symbol]['entry']) * abs(self.symbol_data[symbol]['qty'])
+            else:
+                profit = (self.symbol_data[symbol]['entry'] - current_price) * abs(self.symbol_data[symbol]['qty'])
+                
+            invested = self.symbol_data[symbol]['entry'] * abs(self.symbol_data[symbol]['qty']) / self.lev
+            if invested <= 0:
+                return False
+                
+            current_roi = (profit / invested) * 100
+            
+            # Kiểm tra nếu đạt ROI trigger
+            if current_roi >= self.roi_trigger:
+                # 🔴 SỬ DỤNG TÍN HIỆU ĐÓNG LỆNH
+                exit_signal = self.coin_finder.get_exit_signal(symbol)
+                
+                if exit_signal:
+                    reason = f"🎯 Đạt ROI {self.roi_trigger}% + Tín hiệu đóng lệnh (ROI: {current_roi:.2f}%)"
+                    self._close_symbol_position(symbol, reason)
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"❌ Lỗi kiểm tra đóng lệnh thông minh {symbol}: {str(e)}")
+            return False
 
     def _handle_price_update(self, price, symbol):
         """XỬ LÝ CẬP NHẬT GIÁ"""
