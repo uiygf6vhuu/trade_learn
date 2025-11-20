@@ -280,12 +280,11 @@ def get_all_usdc_pairs(limit=100):
         return []
 
 def get_max_leverage(symbol, api_key, api_secret):
-    """Lấy đòn bẩy tối đa cho một symbol - ĐÃ SỬA LỖI"""
+    """Lấy đòn bẩy tối đa cho một symbol"""
     try:
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
-            logger.error(f"❌ Không lấy được exchangeInfo cho {symbol}")
             return 100
         
         for s in data['symbols']:
@@ -293,11 +292,8 @@ def get_max_leverage(symbol, api_key, api_secret):
                 for f in s['filters']:
                     if f['filterType'] == 'LEVERAGE':
                         if 'maxLeverage' in f:
-                            max_lev = int(f['maxLeverage'])
-                            logger.info(f"💰 {symbol} - Đòn bẩy tối đa: {max_lev}x")
-                            return max_lev
+                            return int(f['maxLeverage'])
                 break
-        logger.warning(f"⚠️ Không tìm thấy thông tin đòn bẩy cho {symbol}, mặc định 100x")
         return 100
     except Exception as e:
         logger.error(f"Lỗi lấy đòn bẩy tối đa {symbol}: {str(e)}")
