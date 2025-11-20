@@ -1,4 +1,4 @@
-# trading_bot_lib_complete_part1_fixed.py - HỆ THỐNG RSI + KHỐI LƯỢNG ĐÃ SỬA LỖI
+# trading_bot_lib_complete_final.py - HỆ THỐNG RSI + KHỐI LƯỢNG VỚI CƠ CHẾ NỐI TIẾP THÔNG MINH
 import json
 import hmac
 import hashlib
@@ -37,7 +37,7 @@ def _last_closed_1m_quote_volume(symbol):
 # ========== CẤU HÌNH LOGGING ==========
 def setup_logging():
     logging.basicConfig(
-        level=logging.INFO,  # 🔴 THAY ĐỔI: HIỂN THỊ CẢ INFO ĐỂ DEBUG
+        level=logging.INFO,  # HIỂN THỊ CẢ INFO ĐỂ DEBUG
         format='%(asctime)s - %(levelname)s - %(module)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
@@ -1618,6 +1618,8 @@ class GlobalMarketBot(BaseBot):
 
 # ========== KHỞI TẠO GLOBAL INSTANCES ==========
 coin_manager = CoinManager()
+
+# ========== BOT MANAGER HOÀN CHỈNH VỚI HỆ THỐNG RSI + KHỐI LƯỢNG ==========
 class BotManager:
     def __init__(self, api_key=None, api_secret=None, telegram_bot_token=None, telegram_chat_id=None):
         self.ws_manager = WebSocketManager()
@@ -1665,27 +1667,7 @@ class BotManager:
             if not chat_id:
                 return False
             
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-            
-            # ESCAPE MESSAGE ĐỂ TRÁNH LỖI HTML
-            safe_message = escape_html(message)
-            
-            payload = {
-                "chat_id": chat_id,
-                "text": safe_message,
-                "parse_mode": "HTML"
-            }
-            
-            # 🔴 CHỈ THÊM REPLY_MARKUP NẾU CÓ
-            if reply_markup is not None:
-                payload["reply_markup"] = json.dumps(reply_markup)
-            
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                return True
-            else:
-                self.log(f"❌ Telegram error ({response.status_code}): {response.text}")
-                return False
+            return send_telegram(message, chat_id, reply_markup, self.telegram_bot_token, self.telegram_chat_id)
                 
         except Exception as e:
             self.log(f"❌ Telegram connection error: {str(e)}")
@@ -2550,4 +2532,3 @@ class BotManager:
                 create_main_menu()
             )
             self.user_states[chat_id] = {}
-
