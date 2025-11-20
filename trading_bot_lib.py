@@ -393,19 +393,43 @@ def get_top_volume_symbols(limit=100):
         return []
 
 def get_max_leverage(symbol, api_key, api_secret):
+    """
+    Lấy leverage chuẩn cho Futures USDC:
+    1. Ưu tiên lấy từ leverageBracket (API mới của Binance)
+    2. Fallback exchangeInfo nếu cần
+    3. Cuối cùng trả về 100 (y như file 93)
+    """
     try:
-        exchange_info = binance_api_request("https://fapi.binance.com/fapi/v1/exchangeInfo")
-        if not exchange_info:
-            logger.warning("Không lấy được exchangeInfo, trả về leverage mặc định 100x")
-            return 100
+        symbol = symbol.upper()
 
-        for symbol_info in exchange_info.get("symbols", []):
-            if symbol_info["symbol"] == symbol:
-                for f in symbol_info["filters"]:
-                    if f["filterType"] == "LEVERAGE" and "maxLeverage" in f:
-                        return int(f.get("maxLeverage", 100))
-        logger.warning(f"Không tìm thấy thông tin leverage cho {symbol}, dùng 100x")
+        # --- 1) API chính xác nhất: leverageBracket ---
+        try:
+            url = f"https://fapi.binance.com/fapi/v1/leverageBracket?symbol={symbol}"
+            data = binance_api_request(url)
+            if data and isinstance(data, list):
+                brackets = data[0].get("brackets", [])
+                if brackets:
+                    lev = int(brackets[0].get("initialLeverage", 100))
+                    return lev
+        except Exception:
+            pass  # bỏ qua, thử phương án 2
+
+        # --- 2) Fallback: exchangeInfo (có thể thiếu filter LEVERAGE) ---
+        try:
+            url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+            info = binance_api_request(url)
+            if info:
+                for s in info.get("symbols", []):
+                    if s.get("symbol") == symbol:
+                        for f in s.get("filters", []):
+                            if f.get("filterType") == "LEVERAGE":
+                                return int(f.get("maxLeverage", 100))
+        except Exception:
+            pass
+
+        # --- 3) Fallback cuối cùng: giống file 93 ---
         return 100
+
     except Exception as e:
         logger.error(f"Lỗi lấy leverage tối đa {symbol}: {str(e)}")
         return 100
